@@ -1,0 +1,9 @@
+fyers-apiv3
+matplotlib
+numpy
+pandas
+pyarrow
+pypnf
+pyotp
+requests
+tabulate
