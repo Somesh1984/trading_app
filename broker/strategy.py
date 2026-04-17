@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from fyers.models import LiveCandle
+from broker.models import LiveCandle
 
 
 class PreviousCandleBreakoutStrategy:
