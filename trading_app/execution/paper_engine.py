@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Dict, List
 
-from broker.models import ClosedPaperTrade, LiveCandle, PaperTrade
+from trading_app.models import ClosedPaperTrade, LiveCandle, PaperTrade
 
 
 class PaperExecutionEngine:

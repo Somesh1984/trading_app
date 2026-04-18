@@ -6,7 +6,7 @@ from typing import Any
 from fyers_apiv3 import fyersModel
 
 from .auth import login
-from .settings import validate_settings
+from ..settings import validate_settings
 
 
 class Broker:

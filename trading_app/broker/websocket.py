@@ -6,8 +6,8 @@ from typing import Callable, Iterable
 from fyers_apiv3.FyersWebsocket import data_ws, order_ws
 
 from .auth import generate_access_token
-from .models import LiveCandle, MarketTick
-from .settings import FYERS_CLIENT_ID, validate_settings
+from ..models import LiveCandle, MarketTick
+from ..settings import FYERS_CLIENT_ID, validate_settings
 
 
 class FyersWebSocketManager:

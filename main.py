@@ -1,7 +1,7 @@
 
-from broker.paper_engine import PaperExecutionEngine
-from broker.strategy import PreviousCandleBreakoutStrategy
-from broker.websocket import FyersWebSocketManager
+from trading_app.execution.paper_engine import PaperExecutionEngine
+from trading_app.pnf.test_strategy import PreviousCandleBreakoutStrategy
+from trading_app.broker.websocket import FyersWebSocketManager
 
 
 def main() -> None:

@@ -4,7 +4,7 @@ import json
 from pathlib import Path
 
 from .api import FyersApiClient
-from .models import FyersSymbol
+from ..models import FyersSymbol
 
 
 class FyersSymbolService:

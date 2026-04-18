@@ -10,7 +10,7 @@ import pyotp
 import requests
 from fyers_apiv3 import fyersModel
 
-from .settings import (
+from ..settings import (
     FYERS_CLIENT_ID,
     FYERS_PIN,
     FYERS_REDIRECT_URI,

@@ -24,3 +24,7 @@ Thumbs.db
 
 #Data Files 
 *data_old
+
+
+#zip files 
+*.zip
