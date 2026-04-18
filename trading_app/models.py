@@ -1,19 +1,80 @@
-
-
-
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Literal
 
 
-@dataclass(frozen=True)
-class FyersSymbol:
+SymbolKind = Literal["equity", "index_spot", "future", "option"]
+
+
+@dataclass(slots=True)
+class FyersBaseSymbol:
     symbol: str
-    display_name: str = ""
-    exchange: str = ""
-    segment: str = ""
-    token: str = ""
+    display_name: str
+    exchange_code: str
+    segment_code: str
+    token: str
+    short_symbol: str = ""
+    lot_size: int = 0
+    tick_size: float = 0.0
+    last_updated: str = ""
+    trading_session: str = ""
+    fy_token_underlying: str = ""
+    raw_exchange: str = ""
+    raw_segment: str = ""
+
+    @property
+    def kind(self) -> SymbolKind:
+        raise NotImplementedError
+
+
+@dataclass(slots=True)
+class FyersEquitySymbol(FyersBaseSymbol):
+    isin: str = ""
+    script_code: str = ""
+
+    @property
+    def kind(self) -> SymbolKind:
+        return "equity"
+
+
+@dataclass(slots=True)
+class FyersIndexSpotSymbol(FyersBaseSymbol):
+    script_code: str = ""
+
+    @property
+    def kind(self) -> SymbolKind:
+        return "index_spot"
+
+
+@dataclass(slots=True)
+class FyersFutureSymbol(FyersBaseSymbol):
+    underlying_symbol: str = ""
+    underlying_script_code: str = ""
+    expiry_epoch: int = 0
+    instrument_type: str = ""
+
+    @property
+    def kind(self) -> SymbolKind:
+        return "future"
+
+
+@dataclass(slots=True)
+class FyersOptionSymbol(FyersBaseSymbol):
+    underlying_symbol: str = ""
+    underlying_script_code: str = ""
+    expiry_epoch: int = 0
+    strike: float = 0.0
+    option_type: str = ""
+    instrument_type: str = ""
+
+    @property
+    def kind(self) -> SymbolKind:
+        return "option"
+
+
+# Temporary compatibility alias for old imports
+FyersSymbol = FyersEquitySymbol
 
 
 @dataclass(frozen=True)
@@ -61,7 +122,7 @@ class LiveCandle:
     low: float
     close: float
     volume: int = 0
-    is_complete: bool = True
+    is_complete: bool = False
 
     def update(self, price: float) -> None:
         if price > self.high:
