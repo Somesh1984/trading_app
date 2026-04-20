@@ -1,13 +1,17 @@
 from __future__ import annotations
 
 from datetime import date
+from datetime import datetime
+from zoneinfo import ZoneInfo
 from typing import Any
+import time as tt
 
 from fyers_apiv3 import fyersModel
 
 from .auth import login
 from ..settings import validate_settings
 
+MARKET_TZ = ZoneInfo("Asia/Kolkata")
 
 class Broker:
     def __init__(self, *, auto_login: bool = True) -> None:
@@ -43,7 +47,7 @@ class Broker:
         date_to: date,
         *,
         cont_flag: str = "1",
-        date_format: str = "1",
+        date_format: str = "1",include_live_candle: bool = False
     ) -> list[list[Any]]:
         payload = {
             "symbol": symbol,
@@ -59,6 +63,11 @@ class Broker:
             return []
 
         candles = response.get("candles", [])
+        candles = self._filter_history_candles(
+                                        candles=candles,
+                                        list_timeframe_seconds=int(resolution) * 60,
+                                        include_live_candle=include_live_candle,
+                                        )
         return candles if isinstance(candles, list) else []
 
 
@@ -130,19 +139,45 @@ class Broker:
 
         return response
 
-    def get_history_for_symbols(self,*,symbols: list[str],resolution: str,date_from: str,date_to: str,cont_flag: str = "1",) -> dict[str, dict]:
-        results: dict[str, dict] = {}
+    # def get_history_for_symbols(self,*,symbols: list[str],resolution: str,date_from: str,date_to: str,cont_flag: str = "1",include_live_candle = False) -> dict[str, dict]:
+    #     results: dict[str, dict] = {}
 
-        for symbol in symbols:
-            results[symbol] = self.get_history(
-                                            symbol=symbol,
-                                            resolution=resolution,
-                                            date_from=date_from,
-                                            date_to=date_to,
-                                            cont_flag=cont_flag,
-                                            )
+    #     for symbol in symbols:
+    #             tt.sleep(0.34)
+                
+                
+    #             results[symbol] = self.get_history(
+    #                                                 symbol=symbol,
+    #                                                 resolution=resolution,
+    #                                                 date_from=date_from,
+    #                                                 date_to=date_to,
+    #                                                 include_live_candle=include_live_candle,
+    #                                                 )
+    #     return results
 
-        return results
+    def get_history_for_symbols(self,*,symbols: list[str],resolution: str,date_from,date_to,cont_flag: str = "1",include_live_candle: bool = False,request_delay: float = 0.34,) -> dict[str, dict]:
+            results: dict[str, dict] = {}
+
+            for i, symbol in enumerate(symbols):
+                if i > 0 and request_delay > 0:
+                    tt.sleep(request_delay)
+
+                results[symbol] = self.get_history(
+                                                    symbol=symbol,
+                                                    resolution=resolution,
+                                                    date_from=date_from,
+                                                    date_to=date_to,
+                                                    cont_flag=cont_flag,
+                                                    include_live_candle=include_live_candle,
+                                                    )
+
+            return results
+
+
+
+
+
+
 
 
     def get_quotes(self,*,symbols: list[str]) -> dict:
@@ -198,16 +233,85 @@ class Broker:
 
         return result
 
+    def _get_now_epoch(self) -> int:
+        return int(datetime.now(MARKET_TZ).timestamp())
+
+    def _is_completed_candle(self,*,bucket_epoch: int,timeframe_seconds: int,now_epoch: int,) -> bool:
+        return (bucket_epoch + timeframe_seconds) <= now_epoch
+
+    def _filter_history_candles(self,*,candles: list,list_timeframe_seconds: int,include_live_candle: bool = False,) -> list:
+
+        if include_live_candle:
+            return candles
+
+        now_epoch = self._get_now_epoch()
+
+        filtered = []
+
+        for row in candles:
+            bucket_epoch = int(row[0])
+
+            if self._is_completed_candle(
+                                            bucket_epoch=bucket_epoch,
+                                            timeframe_seconds=list_timeframe_seconds,
+                                            now_epoch=now_epoch,
+                                            ):
+                filtered.append(row)
+
+        return filtered
 
 
 
+
+# if __name__ == "__main__":
+#     broker = Broker()
+
+#     prices = broker.get_index_spot_prices()
+#     print("\n=== INDEX SPOT PRICES ===")
+#     print(prices)
 
 
 if __name__ == "__main__":
+    from datetime import date, timedelta
+
     broker = Broker()
 
-    prices = broker.get_index_spot_prices()
-    print("\n=== INDEX SPOT PRICES ===")
-    print(prices)
+    today = date.today()
+    start_date = today - timedelta(days=5)
+
+    test_symbols = [
+                    "NSE:NIFTY2642124350CE",
+                    "NSE:NIFTY2642124450PE",
+                    ]
+
+    for symbol in test_symbols:
+        print("\n=== HISTORY CHECK ===")
+        print("SYMBOL:", symbol)
+
+        response = broker.get_client().history(
+                                                data={
+                                                    "symbol": symbol,
+                                                    "resolution": "1",
+                                                    "date_format": "1",
+                                                    "range_from": start_date.strftime("%Y-%m-%d"),
+                                                    "range_to": today.strftime("%Y-%m-%d"),
+                                                    "cont_flag": "1",
+                                                }
+                                            )
+
+        print("TYPE:", type(response))
+        print("KEYS:", list(response.keys()) if isinstance(response, dict) else "NOT_DICT")
+
+        candles = response.get("candles", []) if isinstance(response, dict) else []
+        print("CANDLES COUNT:", len(candles))
+
+        if candles:
+            print("FIRST CANDLE:", candles[0])
+            print("LAST CANDLE:", candles[-1])
+
+        print("FULL RESPONSE STATUS:", response.get("s") if isinstance(response, dict) else None)
+        print("FULL RESPONSE CODE:", response.get("code") if isinstance(response, dict) else None)
+        print("FULL RESPONSE MESSAGE:", response.get("message") if isinstance(response, dict) else None)
+
 
     # python -m trading_app.broker.broker

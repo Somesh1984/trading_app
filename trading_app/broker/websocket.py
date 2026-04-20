@@ -123,6 +123,16 @@ class FyersWebSocketManager:
         self._latest_candles[tick.symbol] = candle
         return candle
 
+
+    def subscribe_symbols(self, symbols: list[str]) -> None:
+        if not symbols:
+            return
+
+        unique_symbols = list(dict.fromkeys(symbols))
+        self.data_socket.subscribe(
+                                    symbol=unique_symbols,
+                                    data_type="SymbolUpdate",)
+
     def connect_data_socket(
         self,
         symbols: Iterable[str],
