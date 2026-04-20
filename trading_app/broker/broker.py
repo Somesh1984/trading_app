@@ -164,7 +164,19 @@ class Broker:
 
         return response
 
+    def get_history_for_symbols(self,*,symbols: list[str],resolution: str,date_from: str,date_to: str,cont_flag: str = "1",) -> dict[str, dict]:
+        results: dict[str, dict] = {}
 
+        for symbol in symbols:
+            results[symbol] = self.get_history(
+                                            symbol=symbol,
+                                            resolution=resolution,
+                                            date_from=date_from,
+                                            date_to=date_to,
+                                            cont_flag=cont_flag,
+                                            )
+
+        return results
 
 
 

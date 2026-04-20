@@ -25,7 +25,8 @@ Thumbs.db
 #Data Files 
 *data_old
 *data
-
+# Notebooks
+*notebooks
 
 #zip files 
 *.zip
