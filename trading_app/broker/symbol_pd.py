@@ -113,33 +113,6 @@ class FyersSymbolService:
 
             return option_df["Symbol Ticker"].dropna().tolist()
 
-    # def get_nearest_expiry_date(self,df: pd.DataFrame,*,underlying: str,) -> pd.Timestamp | None:
-
-    #         if df.empty:
-    #             return None
-
-    #         working_df = df.copy()
-
-    #         working_df["Underlying Symbol"] = (working_df["Underlying Symbol"].astype(str).str.strip().str.upper())
-    #         working_df["Option Type"] = (working_df["Option Type"].astype(str).str.strip().str.upper())
-    #         working_df["Expiry Date"] = (working_df["Expiry Date"].astype(str).str.strip())
-
-    #         option_df = working_df[(working_df["Underlying Symbol"].eq(underlying.strip().upper()))
-    #                                 & working_df["Option Type"].isin(["CE","PE"])
-    #                                 & working_df["Expiry Date"].ne("")]
-
-    #         if option_df.empty:
-    #             return None
-
-    #         option_df = option_df.copy()
-    #         option_df["Expiry Parsed"] = pd.to_datetime(option_df["Expiry Date"],errors="coerce",dayfirst=True)
-
-    #         option_df = option_df.dropna(subset=["Expiry Parsed"])
-
-    #         if option_df.empty:
-    #             return None
-
-    #         return option_df["Expiry Parsed"].min().normalize()
 
 
     def get_nearest_expiry_epoch(self,df: pd.DataFrame,*,underlying: str,) -> int | None:
@@ -246,37 +219,146 @@ class FyersSymbolService:
         return list(dict.fromkeys(symbols))
 
 
+    def expand_subscription_range(self,*,index_name: str,day_open_price: float,current_spot_price: float,subscribed_strikes: set[int],base_count: int = 5,) -> dict:
 
+        config = self.INDEX_CONFIG.get(index_name.strip().upper())
+
+        if config is None:
+            return {"range_expanded": False,"new_strikes": [],"all_strikes": sorted(subscribed_strikes),"new_symbols": [],}
+
+        fo_exchange = str(config["fo_exchange"])
+        underlying_symbol = str(config["underlying_symbol"])
+        strike_step = int(config["strike_step"])
+
+        current_strike = math.floor(current_spot_price / strike_step) * strike_step
+
+        if not subscribed_strikes:
+            target_strikes = set(
+                                self.get_open_based_strike_range(
+                                                                day_open_price=day_open_price,
+                                                                current_spot_price=current_spot_price,
+                                                                strike_step=strike_step,
+                                                                base_count=base_count,
+                                                                )
+                                )
+        else:
+            min_subscribed_strike = min(subscribed_strikes)
+            max_subscribed_strike = max(subscribed_strikes)
+
+            if min_subscribed_strike <= current_strike <= max_subscribed_strike:
+                return {
+                        "range_expanded": False,
+                        "new_strikes": [],
+                        "all_strikes": sorted(subscribed_strikes),
+                        "new_symbols": [],
+                        }
+
+            target_strikes = set(
+                                self.get_open_based_strike_range(
+                                                                day_open_price=current_spot_price,
+                                                                current_spot_price=current_spot_price,
+                                                                strike_step=strike_step,
+                                                                base_count=base_count,
+                                                                )
+                                )
+
+        new_strikes = sorted(target_strikes - subscribed_strikes)
+
+        if not new_strikes:
+            return {
+                    "range_expanded": False,
+                    "new_strikes": [],
+                    "all_strikes": sorted(subscribed_strikes),
+                    "new_symbols": [],
+                    }
+
+        df = self.fetch_symbol_master_df(exchanges=[fo_exchange])
+
+        expiry_epoch = self.get_nearest_expiry_epoch(
+                                                    df,
+                                                    underlying=underlying_symbol,
+                                                    )
+
+        new_symbols = self.get_option_symbols_for_strikes(
+                                                        df,
+                                                        underlying=underlying_symbol,
+                                                        strikes=new_strikes,
+                                                        expiry_epoch=expiry_epoch,
+                                                        )
+
+        all_strikes = sorted(subscribed_strikes | set(new_strikes))
+
+        return {
+                "range_expanded": True,
+                "new_strikes": new_strikes,
+                "all_strikes": all_strikes,
+                "new_symbols": new_symbols,
+                }
 
 
 
 
 # if __name__ == "__main__":
+#     from trading_app.broker.broker import Broker
+
+#     broker = Broker()
 #     service = FyersSymbolService()
 
-#     strikes = service.get_open_based_strike_range(
-#         day_open_price=24235,
-#         current_spot_price=24540,
-#         strike_step=50,
-#         base_count=5,
-#     )
-#     print(strikes)
+#     prices = broker.get_index_spot_prices()
+
+#     result = service.expand_subscription_range(
+#                                                 index_name="NIFTY",
+#                                                 day_open_price=prices["NIFTY"]["open"],
+#                                                 current_spot_price=prices["NIFTY"]["current"],
+#                                                 subscribed_strikes=set(),
+#                                                 base_count=5,
+#                                                 )
+
+#     print(result)
 
 
 if __name__ == "__main__":
+    from trading_app.broker.broker import Broker
+
+    broker = Broker()
     service = FyersSymbolService()
 
-    symbols = service.build_subscription_symbols(
-        index_prices={
-            "NIFTY": {"open": 24235.0, "current": 24540.0},
-            "SENSEX": {"open": 79850.0, "current": 80120.0},
-        },
-        include_spot=True,
-        base_count=5,
-    )
+    prices = broker.get_index_spot_prices()
 
-    for symbol in symbols[:40]:
-        print(symbol)
+    initial_result = service.expand_subscription_range(
+                                                    index_name="NIFTY",
+                                                    day_open_price=prices["NIFTY"]["open"],
+                                                    current_spot_price=prices["NIFTY"]["current"],
+                                                    subscribed_strikes=set(),
+                                                    base_count=5,
+                                                    )
+
+    print("\n=== INITIAL RESULT ===")
+    print(initial_result)
+
+    subscribed_strikes = set(initial_result["all_strikes"])
+
+    no_expand_result = service.expand_subscription_range(
+                                                        index_name="NIFTY",
+                                                        day_open_price=prices["NIFTY"]["open"],
+                                                        current_spot_price=prices["NIFTY"]["current"],
+                                                        subscribed_strikes=subscribed_strikes,
+                                                        base_count=5,
+                                                        )
+
+    print("\n=== NO EXPAND RESULT ===")
+    print(no_expand_result)
+
+    expand_result = service.expand_subscription_range(
+                                                    index_name="NIFTY",
+                                                    day_open_price=prices["NIFTY"]["open"],
+                                                    current_spot_price=24780.0,
+                                                    subscribed_strikes=subscribed_strikes,
+                                                    base_count=5,
+                                                    )
+
+    print("\n=== EXPAND RESULT ===")
+    print(expand_result)
 
 
 

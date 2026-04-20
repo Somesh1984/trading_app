@@ -68,41 +68,7 @@ class Broker:
             raise RuntimeError("Invalid orderbook response from FYERS.")
         return response
 
-    # def place_order(
-    #     self,
-    #     *,
-    #     symbol: str,
-    #     qty: int,
-    #     side: int,
-    #     productType: str = "INTRADAY",
-    #     orderType: int = 2,
-    #     limitPrice: float = 0,
-    #     stopPrice: float = 0,
-    #     validity: str = "DAY",
-    #     disclosedQty: int = 0,
-    #     offlineOrder: bool = False,
-    #     stopLoss: float = 0,
-    #     takeProfit: float = 0,
-    # ) -> dict[str, Any]:
-    #     payload = {
-    #         "symbol": symbol,
-    #         "qty": qty,
-    #         "type": orderType,
-    #         "side": side,
-    #         "productType": productType,
-    #         "limitPrice": limitPrice,
-    #         "stopPrice": stopPrice,
-    #         "validity": validity,
-    #         "disclosedQty": disclosedQty,
-    #         "offlineOrder": offlineOrder,
-    #         "stopLoss": stopLoss,
-    #         "takeProfit": takeProfit,
-    #     }
 
-    #     response = self.get_client().place_order(payload)
-    #     if not isinstance(response, dict):
-    #         raise RuntimeError("Invalid place_order response from FYERS.")
-    #     return response
 
     def cancel_order(self, order_id: str) -> dict[str, Any]:
         payload = {"id": order_id}
@@ -179,9 +145,69 @@ class Broker:
         return results
 
 
+    def get_quotes(self,*,symbols: list[str]) -> dict:
+        client = self.get_client()
 
-# if __name__ == "__main__":
-#     broker = Broker()
-#     print("Broker created")
-#     profile = broker.get_profile()
-#     print(profile)
+        data = {
+            "symbols": ",".join(symbols)
+        }
+
+        return client.quotes(data=data)
+
+
+    def get_depth(self,*,symbols: list[str],ohlcv_flag: int = 1) -> dict:
+        client = self.get_client()
+
+        data = {
+            "symbol": ",".join(symbols),
+            "ohlcv_flag": str(ohlcv_flag),
+        }
+
+        return client.depth(data=data)
+
+
+
+    def get_index_spot_prices(self) -> dict[str, dict[str, float]]:
+        symbols = [
+                    "NSE:NIFTY50-INDEX",
+                    "BSE:SENSEX-INDEX",]
+
+        response = self.get_quotes(symbols=symbols)
+
+        result: dict[str, dict[str, float]] = {}
+
+        data = response.get("d", [])
+
+        for item in data:
+            symbol = str(item.get("n", ""))
+            values = item.get("v", {})
+
+            open_price = float(values.get("open_price", 0))
+            current_price = float(values.get("lp", 0))
+
+            if symbol == "NSE:NIFTY50-INDEX":
+                key = "NIFTY"
+            elif symbol == "BSE:SENSEX-INDEX":
+                key = "SENSEX"
+            else:
+                continue
+
+            result[key] = {
+                            "open": open_price,
+                            "current": current_price,}
+
+        return result
+
+
+
+
+
+
+if __name__ == "__main__":
+    broker = Broker()
+
+    prices = broker.get_index_spot_prices()
+    print("\n=== INDEX SPOT PRICES ===")
+    print(prices)
+
+    # python -m trading_app.broker.broker
