@@ -108,13 +108,3 @@ normalized display
 Ye helpful hai, but paper trading ke liye mandatory nahi.
 
 
-============================================== Completion Tracking ==========================
-
-M1- completed 
-M2- completed 
-M3- completed 
-M4- Not Started
-M5- In progress
-M6- Not Started
-M7- In progress
-M8- Partial
