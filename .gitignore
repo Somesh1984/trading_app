@@ -30,3 +30,6 @@ Thumbs.db
 
 #zip files 
 *.zip
+
+#csv files
+*.csv

@@ -1,202 +1,120 @@
+Updated Milestones till Paper Trading
 M1: Runtime Stabilization
 
-Goal:
-Current project ko clean, predictable aur repeatable run state me lana.
-
-Isme kya aayega:
+Goal: project ko clean aur repeatable run state me lana 
+Include:
 
 imports cleanup
-duplicate/unused modules identify karna
-main.py flow ko stable banana
-config validation ko strict karna
-basic logging improve karna
+config/env validation
+main.py flow stable
+basic run verification
+
+Ye current base milestone rahega.
 
 
+===============================================================
+M2: Broker Core Completion
+
+Goal: FYERS broker layer ko usable banana
+Include:
+
+auth/login stable
+profile fetch
+history fetch
+basic broker wrapper methods
+response normalization
 
 
+=================================================================
+M3: Live Market Stream
 
-M2: Historical + Live Continuity
+Goal: websocket se clean live tick stream lena
+Include:
 
-Goal:
-Historical candles aur live websocket candles ke beech koi gap na rahe.
+websocket connect
+subscribed symbols se ticks receive
+tick parsing
+broker → app tick flow
 
-Isme kya aayega:
+===================================================================
 
-startup warmup ko harden karna
-partial/live candle handling
+M4: Historical + Live Continuity
+
+Goal: historical aur websocket data ke beech gap na rahe
+Include:
+
+startup historical warmup
 last closed candle continuity
-reconnect ke baad missing candle recovery
-sequential candle stream maintain karna
+partial/live candle handling
+startup gap bridging
 
+Ye bahut important hai, aapke current stage ke hisaab se bhi.
 
+====================================================================
 
-M3: State Persistence
+M5: Candle Engine Completion
 
-Goal:
-App restart ya websocket break ke baad bhi minimum required state recover ho sake.
+Goal: ticks se reliable candles banana
+Include:
 
-Isme kya aayega:
-
-latest tick/state save
-latest closed candles save
-open paper trades state save
-restart par restore logic
-parquet/state storage ko runner me integrate karna
-
-
-
-
-M4: Symbol Universe Management
-
-Goal:
-Live subscribed symbols ko controlled aur reliable tarike se manage karna.
-
-Isme kya aayega:
-
-spot/index tracking
-ATM/OTM/ITM option selection
-dynamic resubscription
-new symbol historical backfill
-symbols.py vs symbol_pd.py responsibility clear karna
-
-
-
-M5: Candle Engine Hardening
-
-Goal:
-Candle builder ko robust banana taki market timing edge cases me bhi sahi kaam kare.
-
-Isme kya aayega:
-
+5s candle build
+1m candle build
+candle close event
 bucket alignment
-market open handling
-mid-candle app start
-websocket reconnect edge cases
-different timeframes support ka clean base
+mid-candle app start handling
 
+====================================================================
 
+M6: Strategy Input Pipeline
 
+Goal: candle output ko strategy/analysis layer tak clean bhejna
+Include:
 
-M6: Strategy Pipeline Cleanup
+candle callback flow
+symbol-wise routing
+strategy input structure
+main.py me pipeline connect karna
 
-Goal:
-Signal generation flow ko clean service pattern me lana.
-
-Isme kya aayega:
-
-strategy input/output standardize karna
-candle to signal pipeline simplify karna
-breakout strategy ko isolate karna
-future strategies ke liye reusable interface banana
-
-
-
+===================================================================
 
 M7: Paper Trading Engine Completion
 
-Goal:
-Paper execution ko reliable testing engine banana.
+Goal: signal se paper trade lifecycle chalana
+Include:
 
-Isme kya aayega:
+entry flow
+exit flow
+reverse signal handling
+realized/unrealized pnl
+closed trades tracking
+portfolio pnl reporting
 
-entry/exit flow harden karna
-reverse signal handling verify karna
-SL/TP handling improve karna
-realized/unrealized/portfolio PnL validation
-trade lifecycle reporting
-
-
-
-
-M8: PNF Integration
-
-Goal:
-Existing PNF engine ko live market pipeline ke saath connect karna.
-
-Isme kya aayega:
-
-candle feed to PNF service
-PNF chart state update
-PNF signal extraction
-runner me PNF hook
-PNF aur execution ke beech interface define karna
+Ye paper trading tak ka main milestone hai.
 
 
+===================================================================
 
+Optional before paper trading complete bolna
+M8: Basic Account Data Readiness
 
-M9: Order Flow Readiness
-
-Goal:
-Paper se real broker order flow ki taraf clean transition ka base banana.
-
-Isme kya aayega:
-
-place/cancel wrapper verification
-order response normalization
-order websocket readiness
-broker execution interface
-paper/live execution separation
-
-
-
-
-M10: Positions, Holdings, Reporting
-
-Goal:
-Account-level broker data ko execution layer ke saath align karna.
-
-Isme kya aayega:
+Goal: broker side supporting reads available ho
+Include:
 
 positions fetch
 holdings fetch
-orderbook integration
-state display/reporting
-reconciliation helpers
+orderbook fetch
+normalized display
+
+Ye helpful hai, but paper trading ke liye mandatory nahi.
 
 
+============================================== Completion Tracking ==========================
 
-
-M11: Production Safety Layer
-
-Goal:
-System ko accidental bad behavior se bachana.
-
-Isme kya aayega:
-
-duplicate signal protection
-duplicate order guard
-reconnect safety
-symbol validation
-trading hour checks
-fail-safe exits/logging
-
-
-
-
-M12: Cleanup, Refactor, Tests
-
-Goal:
-Working prototype ko maintainable project me convert karna.
-
-Isme kya aayega:
-
-folder/module cleanup
-duplicate code remove
-naming consistency
-manual test scripts
-basic unit tests
-final documentation
-Recommended order
-
-Aapke current project ke liye best sequence ye hai:
-
-M1 → M2 → M3 → M4 → M5 → M6 → M7 → M8 → M9 → M10 → M11 → M12
-
-Sabse immediate important milestones
-
-Agar priority basis par dekhen to pehle ye 4 sabse important hain:
-
-M1 Runtime Stabilization
-M2 Historical + Live Continuity
-M3 State Persistence
-M5 Candle Engine Hardening
+M1- completed 
+M2- completed 
+M3- completed 
+M4- Not Started
+M5- In progress
+M6- Not Started
+M7- In progress
+M8- Partial
