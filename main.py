@@ -23,7 +23,6 @@ def main() -> None:
     print("STARTING MARKET STREAM", flush=True)
     print("SYMBOL:", SYMBOL, flush=True)
     print("TIMEFRAMES: 5s, 1m", flush=True)
-
     
 
     try:
