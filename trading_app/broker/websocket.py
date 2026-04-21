@@ -1,4 +1,3 @@
-
 from __future__ import annotations
 
 from typing import Callable, Iterable
@@ -23,6 +22,9 @@ class FyersWebSocketManager:
         self._candle_seconds = candle_seconds
         self._session_start_seconds = 9 * 3600 + 15 * 60  # 09:15
 
+    # ---------------------------
+    # Public read helpers
+    # ---------------------------
     def get_latest_tick(self, symbol: str) -> MarketTick | None:
         return self._latest_ticks.get(symbol)
 
@@ -44,6 +46,9 @@ class FyersWebSocketManager:
         candles = self.pop_closed_candles()
         return [candle for candle in candles if candle.is_complete]
 
+    # ---------------------------
+    # Auth / token helpers
+    # ---------------------------
     def _get_ws_token(self) -> str:
         if self._access_token is None:
             validate_settings()
@@ -57,6 +62,9 @@ class FyersWebSocketManager:
         self._access_token = f"{FYERS_CLIENT_ID}:{token}"
         return self._access_token
 
+    # ---------------------------
+    # Candle bucket helpers
+    # ---------------------------
     def _get_bucket_epoch(self, epoch: int) -> int:
         session_day_start = (epoch // 86400) * 86400
         session_anchor = session_day_start + self._session_start_seconds
@@ -70,6 +78,9 @@ class FyersWebSocketManager:
     def _is_incomplete_start(self, epoch: int, bucket_epoch: int) -> bool:
         return epoch != bucket_epoch
 
+    # ---------------------------
+    # Tick / candle state update
+    # ---------------------------
     def _update_latest_tick(self, message: dict) -> MarketTick | None:
         symbol = str(message.get("symbol", "")).strip()
         if not symbol:
@@ -123,16 +134,32 @@ class FyersWebSocketManager:
         self._latest_candles[tick.symbol] = candle
         return candle
 
+    # ---------------------------
+    # Subscription helpers
+    # ---------------------------
+    def subscribe_symbols(self, symbols: Iterable[str], *, data_type: str = "SymbolUpdate") -> None:
+        if self._data_socket is None:
+            raise RuntimeError("Data socket is not connected yet.")
 
-    def subscribe_symbols(self, symbols: list[str]) -> None:
-        if not symbols:
+        unique_symbols = list(dict.fromkeys(str(symbol).strip() for symbol in symbols if str(symbol).strip()))
+        if not unique_symbols:
             return
 
-        unique_symbols = list(dict.fromkeys(symbols))
-        self.data_socket.subscribe(
-                                    symbol=unique_symbols,
-                                    data_type="SymbolUpdate",)
+        self._data_socket.subscribe(symbols=unique_symbols, data_type=data_type)
 
+    def unsubscribe_symbols(self, symbols: Iterable[str], *, data_type: str = "SymbolUpdate") -> None:
+        if self._data_socket is None:
+            raise RuntimeError("Data socket is not connected yet.")
+
+        unique_symbols = list(dict.fromkeys(str(symbol).strip() for symbol in symbols if str(symbol).strip()))
+        if not unique_symbols:
+            return
+
+        self._data_socket.unsubscribe(symbols=unique_symbols, data_type=data_type)
+
+    # ---------------------------
+    # Data socket
+    # ---------------------------
     def connect_data_socket(
         self,
         symbols: Iterable[str],
@@ -144,11 +171,15 @@ class FyersWebSocketManager:
         litemode: bool = False,
         data_type: str = "SymbolUpdate",
     ):
-        symbols = list(symbols)
+        initial_symbols = list(
+            dict.fromkeys(str(symbol).strip() for symbol in symbols if str(symbol).strip())
+        )
 
-        def _on_open():
-            self._data_socket.subscribe(symbols=symbols, data_type=data_type)
+        def _on_open() -> None:
+            if initial_symbols:
+                self._data_socket.subscribe(symbols=initial_symbols, data_type=data_type)
             self._data_socket.keep_running()
+
             if on_open is not None:
                 on_open()
 
@@ -165,14 +196,17 @@ class FyersWebSocketManager:
             write_to_file=False,
             reconnect=True,
             on_connect=_on_open,
-            on_close=on_close or (lambda message: print("DATA CLOSE:", message)),
-            on_error=on_error or (lambda message: print("DATA ERROR:", message)),
+            on_close=on_close or (lambda message: print("DATA CLOSE:", message, flush=True)),
+            on_error=on_error or (lambda message: print("DATA ERROR:", message, flush=True)),
             on_message=_on_message,
         )
 
         self._data_socket.connect()
         return self._data_socket
 
+    # ---------------------------
+    # Order socket
+    # ---------------------------
     def connect_order_socket(
         self,
         *,
@@ -184,37 +218,37 @@ class FyersWebSocketManager:
         on_close: Callable[[object], None] | None = None,
         on_open: Callable[[], None] | None = None,
     ):
-        def _on_orders(message):
+        def _on_orders(message: dict) -> None:
             if on_order is not None:
                 on_order(message)
             elif on_general is not None:
                 on_general(message)
             else:
-                print("ORDER UPDATE:", message)
+                print("ORDER UPDATE:", message, flush=True)
 
-        def _on_trades(message):
+        def _on_trades(message: dict) -> None:
             if on_trade is not None:
                 on_trade(message)
             elif on_general is not None:
                 on_general(message)
             else:
-                print("TRADE UPDATE:", message)
+                print("TRADE UPDATE:", message, flush=True)
 
-        def _on_positions(message):
+        def _on_positions(message: dict) -> None:
             if on_position is not None:
                 on_position(message)
             elif on_general is not None:
                 on_general(message)
             else:
-                print("POSITION UPDATE:", message)
+                print("POSITION UPDATE:", message, flush=True)
 
         self._order_socket = order_ws.FyersOrderSocket(
             access_token=self._get_ws_token(),
             write_to_file=False,
             log_path="",
-            on_connect=on_open or (lambda: print("ORDER SOCKET CONNECTED")),
-            on_close=on_close or (lambda message: print("ORDER CLOSE:", message)),
-            on_error=on_error or (lambda message: print("ORDER ERROR:", message)),
+            on_connect=on_open or (lambda: print("ORDER SOCKET CONNECTED", flush=True)),
+            on_close=on_close or (lambda message: print("ORDER CLOSE:", message, flush=True)),
+            on_error=on_error or (lambda message: print("ORDER ERROR:", message, flush=True)),
             on_orders=_on_orders,
             on_trades=_on_trades,
             on_positions=_on_positions,
