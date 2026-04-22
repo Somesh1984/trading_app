@@ -56,11 +56,13 @@ class FyersWebSocketManager:
             self._access_token = f"{FYERS_CLIENT_ID}:{token}"
         return self._access_token
 
+
     def refresh_token(self) -> str:
         validate_settings()
-        token = generate_access_token()
+        token = generate_access_token(force_refresh=True)
         self._access_token = f"{FYERS_CLIENT_ID}:{token}"
         return self._access_token
+
 
     # ---------------------------
     # Candle bucket helpers

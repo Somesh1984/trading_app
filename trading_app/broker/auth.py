@@ -1,9 +1,8 @@
 
-
-
 from __future__ import annotations
 
 import base64
+from threading import Lock
 from urllib.parse import parse_qs, urlparse
 
 import pyotp
@@ -20,11 +19,15 @@ from ..settings import (
 )
 
 
+_AUTH_LOCK = Lock()
+_CACHED_ACCESS_TOKEN: str | None = None
+
+
 def _b64(value: str) -> str:
     return base64.b64encode(value.encode("ascii")).decode("ascii")
 
 
-def generate_access_token() -> str:
+def _generate_new_access_token() -> str:
     send_otp_url = "https://api-t2.fyers.in/vagator/v2/send_login_otp_v2"
     verify_otp_url = "https://api-t2.fyers.in/vagator/v2/verify_otp"
     verify_pin_url = "https://api-t2.fyers.in/vagator/v2/verify_pin_v2"
@@ -97,8 +100,22 @@ def generate_access_token() -> str:
     app_session.set_token(auth_code)
 
     final_token = app_session.generate_token()
-    access_token = final_token["access_token"]
-    return access_token
+    return final_token["access_token"]
+
+
+def generate_access_token(*, force_refresh: bool = False) -> str:
+    global _CACHED_ACCESS_TOKEN
+
+    with _AUTH_LOCK:
+        if _CACHED_ACCESS_TOKEN is None or force_refresh:
+            _CACHED_ACCESS_TOKEN = _generate_new_access_token()
+        return _CACHED_ACCESS_TOKEN
+
+
+def clear_cached_access_token() -> None:
+    global _CACHED_ACCESS_TOKEN
+    with _AUTH_LOCK:
+        _CACHED_ACCESS_TOKEN = None
 
 
 def login() -> fyersModel.FyersModel:
@@ -109,3 +126,4 @@ def login() -> fyersModel.FyersModel:
         is_async=False,
         log_path="",
     )
+
