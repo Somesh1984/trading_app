@@ -35,6 +35,8 @@ def candle_to_row(candle: LiveCandle) -> dict:
     }
 
 
+
+
 def append_rows_to_csv(filename: str, rows: list[dict]) -> None:
     if not rows:
         return
