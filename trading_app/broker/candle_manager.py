@@ -22,9 +22,10 @@ class CandleManager:
     - historical closed candles ko state me seed karta hai
     """
 
-    def __init__(self, *, timeframe_seconds: int, startup_epoch: int | None = None,debug:bool=False) -> None:
+    def __init__(self, *, timeframe_seconds: int, startup_epoch: int | None = None,allow_partial_bucket:bool=True,debug:bool=False) -> None:
         # __init__ ke andar add karo
         self.downstream_managers: list["CandleManager"] = []
+        self.allow_partial_bucket = allow_partial_bucket
         self.debug = debug  # DEBUG logs control karne ke liye
         self.timeframe_seconds = timeframe_seconds
         # Closed candles ko consumer tak dene ke liye queue
@@ -51,22 +52,32 @@ class CandleManager:
                                      if self.startup_epoch is not None else None)
 
         # Agar app bucket start ke beech me start hui hai to first startup bucket partial hai
-        self.startup_bucket_is_partial = (self.startup_epoch is not None 
-                                          and self.startup_bucket_epoch is not None 
-                                          and self.startup_epoch > self.startup_bucket_epoch)
-        
+        self.startup_bucket_is_partial = (
+                                                self.allow_partial_bucket
+                                                and self.startup_epoch is not None
+                                                and self.startup_bucket_epoch is not None
+                                                and self.startup_epoch > self.startup_bucket_epoch
+                                            )
 
         self._pending_closed_candle_by_symbol: dict[str, LiveCandle] = {}
         self._pending_close_start_epoch_by_symbol: dict[str, int] = {}
         self._next_bucket_tick_count_by_symbol: dict[str, int] = {}
-
+        self._on_gap_detected = None  # callback
 
 
 
     def set_startup_epoch(self, startup_epoch: int) -> None:
         self.startup_epoch = int(startup_epoch)
-        self.startup_bucket_epoch = self._get_anchored_bucket_epoch("NSE:",self.startup_epoch,self.timeframe_seconds,)
-        self.startup_bucket_is_partial = self.startup_epoch > self.startup_bucket_epoch
+        self.startup_bucket_epoch = self._get_anchored_bucket_epoch(
+                                                                        "NSE:",
+                                                                        self.startup_epoch,
+                                                                        self.timeframe_seconds,
+                                                                    )
+        self.startup_bucket_is_partial = (
+                                                self.allow_partial_bucket
+                                                and self.startup_epoch > self.startup_bucket_epoch
+                                            )
+
 
 
 
@@ -193,15 +204,18 @@ class CandleManager:
         pending = self._pending_closed_candle_by_symbol.get(tick.symbol)
         last_closed_bucket = self._last_closed_bucket_by_symbol.get(tick.symbol)
 
-        # 1) pending candle ko finalize karo:
-        #    - agar next bucket me 2 ticks aa gaye
+        # 1) pending candle finalize:
+        #    - fresh bucket me 2 ticks aa gaye
         #    - ya 1 second grace cross ho gaya
         if pending is not None:
             pending_start = self._pending_close_start_epoch_by_symbol.get(
                 tick.symbol,
                 pending.bucket_epoch + pending.timeframe_seconds,
             )
-            next_bucket_tick_count = self._next_bucket_tick_count_by_symbol.get(tick.symbol, 0)
+            next_bucket_tick_count = self._next_bucket_tick_count_by_symbol.get(
+                tick.symbol,
+                0,
+            )
 
             should_close_pending = False
 
@@ -212,10 +226,27 @@ class CandleManager:
                 should_close_pending = True
 
             if should_close_pending:
+                prev_closed_bucket = self._last_closed_bucket_by_symbol.get(tick.symbol)
+
                 self._emit_closed_candle(pending)
+
+                # gap detect + callback
+                if prev_closed_bucket is not None:
+                    expected_next_bucket = prev_closed_bucket + self.timeframe_seconds
+                    gap_to_bucket = pending.bucket_epoch - self.timeframe_seconds
+
+                    if expected_next_bucket <= gap_to_bucket and self._on_gap_detected is not None:
+                        self._on_gap_detected(
+                            symbol=tick.symbol,
+                            from_epoch=expected_next_bucket,
+                            to_epoch=gap_to_bucket,
+                            timeframe_seconds=self.timeframe_seconds,
+                        )
+
                 self._pending_closed_candle_by_symbol.pop(tick.symbol, None)
                 self._pending_close_start_epoch_by_symbol.pop(tick.symbol, None)
                 self._next_bucket_tick_count_by_symbol.pop(tick.symbol, None)
+
                 pending = None
                 last_closed_bucket = self._last_closed_bucket_by_symbol.get(tick.symbol)
 
@@ -231,12 +262,12 @@ class CandleManager:
                 )
             return
 
-        # 3) agar late tick pending candle ke bucket ka hai to pending me merge karo
+        # 3) late tick pending candle ke bucket ka hai to pending me merge karo
         if pending is not None and bucket_epoch == pending.bucket_epoch:
             pending.update(tick.ltp)
             return
 
-        # 4) agar koi live candle nahi hai to naya candle start karo
+        # 4) live candle nahi hai to naya candle start karo
         if current is None:
             self._live_candles[tick.symbol] = self._new_candle_from_tick(
                 tick,
@@ -249,7 +280,7 @@ class CandleManager:
                 )
             return
 
-        # 5) purane bucket ka tick aaya, ignore karo
+        # 5) purane bucket ka tick ignore
         if bucket_epoch < current.bucket_epoch:
             if self.debug:
                 print(
@@ -283,8 +314,6 @@ class CandleManager:
             tick,
             bucket_epoch,
         )
-
-
 
 
     def pop_closed_candles(self) -> list[LiveCandle]:
@@ -346,6 +375,11 @@ class CandleManager:
         )
         return int(session_start.timestamp())
     
+
+    def set_gap_callback(self, callback) -> None:
+        self._on_gap_detected = callback
+
+
 
 
     def aggregate_closed_candle(self, source_candle: LiveCandle) -> None:
