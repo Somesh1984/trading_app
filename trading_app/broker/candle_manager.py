@@ -7,7 +7,9 @@ from queue import Queue
 from typing import Any
 
 from trading_app.models import LiveCandle, MarketTick
-
+from datetime import datetime
+from zoneinfo import ZoneInfo
+IST = ZoneInfo("Asia/Kolkata")
 
 class CandleManager:
     """
@@ -21,6 +23,8 @@ class CandleManager:
     """
 
     def __init__(self, *, timeframe_seconds: int, startup_epoch: int | None = None,debug:bool=False) -> None:
+        # __init__ ke andar add karo
+        self.downstream_managers: list["CandleManager"] = []
         self.debug = debug  # DEBUG logs control karne ke liye
         self.timeframe_seconds = timeframe_seconds
         # Closed candles ko consumer tak dene ke liye queue
@@ -41,20 +45,32 @@ class CandleManager:
         self.startup_epoch = int(startup_epoch) if startup_epoch is not None else None
 
         # Startup kis bucket ke andar hua, wo bucket epoch nikalte hain
-        self.startup_bucket_epoch = (self._get_bucket_epoch(self.startup_epoch)if self.startup_epoch is not None else None )
+        # __init__
+
+        self.startup_bucket_epoch = (self._get_anchored_bucket_epoch("NSE:",self.startup_epoch,self.timeframe_seconds,)
+                                     if self.startup_epoch is not None else None)
 
         # Agar app bucket start ke beech me start hui hai to first startup bucket partial hai
         self.startup_bucket_is_partial = (self.startup_epoch is not None 
                                           and self.startup_bucket_epoch is not None 
                                           and self.startup_epoch > self.startup_bucket_epoch)
 
+
+
+
     def set_startup_epoch(self, startup_epoch: int) -> None:
         self.startup_epoch = int(startup_epoch)
-        self.startup_bucket_epoch = self._get_bucket_epoch(self.startup_epoch)
+        self.startup_bucket_epoch = self._get_anchored_bucket_epoch("NSE:",self.startup_epoch,self.timeframe_seconds,)
         self.startup_bucket_is_partial = self.startup_epoch > self.startup_bucket_epoch
 
-    def _get_bucket_epoch(self, epoch_seconds: int) -> int:
-        return (epoch_seconds // self.timeframe_seconds) * self.timeframe_seconds
+
+
+    def _get_bucket_epoch(self, symbol: str, epoch_seconds: int) -> int:
+        return self._get_anchored_bucket_epoch(
+            symbol,
+            epoch_seconds,
+            self.timeframe_seconds,
+        )
 
     def _is_partial_bucket(self, bucket_epoch: int) -> bool:
         if not self.startup_bucket_is_partial:
@@ -100,6 +116,10 @@ class CandleManager:
                   "L:",candle.low,"C:",candle.close,flush=True,)
 
         self.closed_candle_queue.put(candle)
+       
+        # Runtime multi-timeframe aggregation chain
+        for manager in self.downstream_managers:
+            manager.aggregate_closed_candle(candle)
 
 
 
@@ -171,7 +191,8 @@ class CandleManager:
         # Ye tick ab valid accepted tick hai, isliye latest epoch update kar do
         self._last_tick_epoch_by_symbol[tick.symbol] = tick.exch_feed_time
 
-        bucket_epoch = self._get_bucket_epoch(tick.exch_feed_time)
+        
+        bucket_epoch = self._get_bucket_epoch(tick.symbol, tick.exch_feed_time)
         current = self._live_candles.get(tick.symbol)
         last_closed_bucket = self._last_closed_bucket_by_symbol.get(tick.symbol)
 
@@ -218,3 +239,109 @@ class CandleManager:
         return self._live_candles.get(symbol)
     
 
+    def aggregate_closed_candle(self, source_candle: LiveCandle) -> None:
+        if not source_candle.is_complete:
+            return
+
+        if source_candle.timeframe_seconds >= self.timeframe_seconds:
+            return
+
+        if self.timeframe_seconds % source_candle.timeframe_seconds != 0:
+            return
+
+        bucket_epoch = self._get_anchored_bucket_epoch(
+            source_candle.symbol,
+            source_candle.bucket_epoch,
+            source_candle.timeframe_seconds,
+        )
+
+        current = self._live_candles.get(source_candle.symbol)
+        last_closed_bucket = self._last_closed_bucket_by_symbol.get(source_candle.symbol)
+
+        if last_closed_bucket is not None and bucket_epoch <= last_closed_bucket:
+            return
+
+        if current is None:
+            self._live_candles[source_candle.symbol] = LiveCandle(
+                symbol=source_candle.symbol,
+                bucket_epoch=bucket_epoch,
+                timeframe_seconds=self.timeframe_seconds,
+                open=source_candle.open,
+                high=source_candle.high,
+                low=source_candle.low,
+                close=source_candle.close,
+                volume=source_candle.volume,
+                is_complete=False,
+            )
+            return
+
+        if bucket_epoch < current.bucket_epoch:
+            return
+
+        if bucket_epoch == current.bucket_epoch:
+            current.high = max(current.high, source_candle.high)
+            current.low = min(current.low, source_candle.low)
+            current.close = source_candle.close
+            current.volume += source_candle.volume
+            return
+
+        self._emit_closed_candle(current)
+
+        self._live_candles[source_candle.symbol] = LiveCandle(
+            symbol=source_candle.symbol,
+            bucket_epoch=bucket_epoch,
+            timeframe_seconds=self.timeframe_seconds,
+            open=source_candle.open,
+            high=source_candle.high,
+            low=source_candle.low,
+            close=source_candle.close,
+            volume=source_candle.volume,
+            is_complete=False,
+        )
+
+
+
+
+
+    def _get_anchored_bucket_epoch(
+        self,
+        symbol: str,
+        timestamp_epoch: int,
+        source_timeframe_seconds: int,
+    ) -> int:
+        if source_timeframe_seconds <= 0:
+            raise ValueError("source_timeframe_seconds must be positive")
+
+        if self.timeframe_seconds % source_timeframe_seconds != 0:
+            raise ValueError(
+                "target timeframe must be an exact multiple of source timeframe"
+            )
+
+        session_anchor = self._get_session_anchor_epoch(symbol, timestamp_epoch)
+
+        elapsed = timestamp_epoch - session_anchor
+        if elapsed < 0:
+            elapsed = 0
+
+        bucket_offset = (elapsed // self.timeframe_seconds) * self.timeframe_seconds
+        return session_anchor + bucket_offset
+
+
+
+    def _get_session_anchor_epoch(self, symbol: str, timestamp_epoch: int) -> int:
+        dt = datetime.fromtimestamp(timestamp_epoch, tz=IST)
+
+        if symbol.startswith("MCX:"):
+            hour = 9
+            minute = 0
+        else:
+            hour = 9
+            minute = 15
+
+        session_start = dt.replace(
+            hour=hour,
+            minute=minute,
+            second=0,
+            microsecond=0,
+        )
+        return int(session_start.timestamp())
