@@ -54,6 +54,11 @@ class CandleManager:
         self.startup_bucket_is_partial = (self.startup_epoch is not None 
                                           and self.startup_bucket_epoch is not None 
                                           and self.startup_epoch > self.startup_bucket_epoch)
+        
+
+        self._pending_closed_candle_by_symbol: dict[str, LiveCandle] = {}
+        self._pending_close_start_epoch_by_symbol: dict[str, int] = {}
+        self._next_bucket_tick_count_by_symbol: dict[str, int] = {}
 
 
 
@@ -72,10 +77,14 @@ class CandleManager:
             self.timeframe_seconds,
         )
 
+
+
     def _is_partial_bucket(self, bucket_epoch: int) -> bool:
         if not self.startup_bucket_is_partial:
             return False
         return bucket_epoch == self.startup_bucket_epoch
+
+
 
     def _new_candle_from_tick(self, tick: MarketTick, bucket_epoch: int) -> LiveCandle:
         return LiveCandle(
@@ -169,6 +178,7 @@ class CandleManager:
         return list(candles)
 
 
+
     def process_tick_message(self, message: dict[str, Any]) -> None:
         symbol = str(message.get("symbol", "")).strip()
         if not symbol:
@@ -178,52 +188,103 @@ class CandleManager:
         if not tick.symbol or tick.exch_feed_time <= 0 or tick.ltp <= 0:
             return
 
-        # Har symbol ka last accepted tick time nikalte hain
-        last_tick_epoch = self._last_tick_epoch_by_symbol.get(tick.symbol)
-
-        # Agar older/out-of-order tick aaya hai to usko ignore kar do
-        # warna running candle ka OHLC distort ho sakta hai
-        if last_tick_epoch is not None and tick.exch_feed_time < last_tick_epoch:
-            if self.debug:
-                print("SKIP STALE TICK:",tick.symbol,tick.exch_feed_time,last_tick_epoch,flush=True,)
-            return
-
-        # Ye tick ab valid accepted tick hai, isliye latest epoch update kar do
-        self._last_tick_epoch_by_symbol[tick.symbol] = tick.exch_feed_time
-
-        
         bucket_epoch = self._get_bucket_epoch(tick.symbol, tick.exch_feed_time)
         current = self._live_candles.get(tick.symbol)
+        pending = self._pending_closed_candle_by_symbol.get(tick.symbol)
         last_closed_bucket = self._last_closed_bucket_by_symbol.get(tick.symbol)
 
+        # 1) pending candle ko finalize karo:
+        #    - agar next bucket me 2 ticks aa gaye
+        #    - ya 1 second grace cross ho gaya
+        if pending is not None:
+            pending_start = self._pending_close_start_epoch_by_symbol.get(
+                tick.symbol,
+                pending.bucket_epoch + pending.timeframe_seconds,
+            )
+            next_bucket_tick_count = self._next_bucket_tick_count_by_symbol.get(tick.symbol, 0)
+
+            should_close_pending = False
+
+            if bucket_epoch > pending.bucket_epoch and next_bucket_tick_count >= 2:
+                should_close_pending = True
+
+            if tick.exch_feed_time >= pending_start + 1:
+                should_close_pending = True
+
+            if should_close_pending:
+                self._emit_closed_candle(pending)
+                self._pending_closed_candle_by_symbol.pop(tick.symbol, None)
+                self._pending_close_start_epoch_by_symbol.pop(tick.symbol, None)
+                self._next_bucket_tick_count_by_symbol.pop(tick.symbol, None)
+                pending = None
+                last_closed_bucket = self._last_closed_bucket_by_symbol.get(tick.symbol)
+
+        # 2) already closed bucket ka tick ignore
         if last_closed_bucket is not None and bucket_epoch <= last_closed_bucket:
             if self.debug:
-                print("SKIP CLOSED BUCKET TICK:",tick.symbol,bucket_epoch,last_closed_bucket,flush=True,)
-
+                print(
+                    "SKIP CLOSED BUCKET TICK:",
+                    tick.symbol,
+                    bucket_epoch,
+                    last_closed_bucket,
+                    flush=True,
+                )
             return
 
-        # Agar symbol ka live candle abhi nahi hai to naya candle start karo
+        # 3) agar late tick pending candle ke bucket ka hai to pending me merge karo
+        if pending is not None and bucket_epoch == pending.bucket_epoch:
+            pending.update(tick.ltp)
+            return
+
+        # 4) agar koi live candle nahi hai to naya candle start karo
         if current is None:
-            self._live_candles[tick.symbol] = self._new_candle_from_tick(tick,bucket_epoch,)
+            self._live_candles[tick.symbol] = self._new_candle_from_tick(
+                tick,
+                bucket_epoch,
+            )
+
+            if pending is not None and bucket_epoch > pending.bucket_epoch:
+                self._next_bucket_tick_count_by_symbol[tick.symbol] = (
+                    self._next_bucket_tick_count_by_symbol.get(tick.symbol, 0) + 1
+                )
             return
 
-        # Safety guard: agar kisi reason se purane bucket ka tick aa gaya
-        # to current candle ko rollback nahi karna
+        # 5) purane bucket ka tick aaya, ignore karo
         if bucket_epoch < current.bucket_epoch:
             if self.debug:
-                print("SKIP OLD BUCKET TICK:",tick.symbol,bucket_epoch,current.bucket_epoch,flush=True,)
+                print(
+                    "SKIP OLD BUCKET TICK:",
+                    tick.symbol,
+                    tick.exch_feed_time,
+                    bucket_epoch,
+                    current.bucket_epoch,
+                    flush=True,
+                )
             return
 
-        # Same bucket hai to current candle ka OHLC update karo
-        if current.bucket_epoch == bucket_epoch:
+        # 6) same bucket -> current update
+        if bucket_epoch == current.bucket_epoch:
             current.update(tick.ltp)
+
+            if pending is not None and bucket_epoch > pending.bucket_epoch:
+                self._next_bucket_tick_count_by_symbol[tick.symbol] = (
+                    self._next_bucket_tick_count_by_symbol.get(tick.symbol, 0) + 1
+                )
             return
 
-        # New bucket start ho gaya, to purana candle close karke emit karo
-        self._emit_closed_candle(current)
+        # 7) new bucket start -> current ko pending me rakho, naya current start karo
+        self._pending_closed_candle_by_symbol[tick.symbol] = current
+        self._pending_close_start_epoch_by_symbol[tick.symbol] = (
+            current.bucket_epoch + current.timeframe_seconds
+        )
+        self._next_bucket_tick_count_by_symbol[tick.symbol] = 1
 
-        # Aur naye bucket ke liye fresh live candle bana do
-        self._live_candles[tick.symbol] = self._new_candle_from_tick(tick,bucket_epoch,)
+        self._live_candles[tick.symbol] = self._new_candle_from_tick(
+            tick,
+            bucket_epoch,
+        )
+
+
 
 
     def pop_closed_candles(self) -> list[LiveCandle]:
@@ -238,67 +299,6 @@ class CandleManager:
     def get_live_candle(self, symbol: str) -> LiveCandle | None:
         return self._live_candles.get(symbol)
     
-
-    def aggregate_closed_candle(self, source_candle: LiveCandle) -> None:
-        if not source_candle.is_complete:
-            return
-
-        if source_candle.timeframe_seconds >= self.timeframe_seconds:
-            return
-
-        if self.timeframe_seconds % source_candle.timeframe_seconds != 0:
-            return
-
-        bucket_epoch = self._get_anchored_bucket_epoch(
-            source_candle.symbol,
-            source_candle.bucket_epoch,
-            source_candle.timeframe_seconds,
-        )
-
-        current = self._live_candles.get(source_candle.symbol)
-        last_closed_bucket = self._last_closed_bucket_by_symbol.get(source_candle.symbol)
-
-        if last_closed_bucket is not None and bucket_epoch <= last_closed_bucket:
-            return
-
-        if current is None:
-            self._live_candles[source_candle.symbol] = LiveCandle(
-                symbol=source_candle.symbol,
-                bucket_epoch=bucket_epoch,
-                timeframe_seconds=self.timeframe_seconds,
-                open=source_candle.open,
-                high=source_candle.high,
-                low=source_candle.low,
-                close=source_candle.close,
-                volume=source_candle.volume,
-                is_complete=False,
-            )
-            return
-
-        if bucket_epoch < current.bucket_epoch:
-            return
-
-        if bucket_epoch == current.bucket_epoch:
-            current.high = max(current.high, source_candle.high)
-            current.low = min(current.low, source_candle.low)
-            current.close = source_candle.close
-            current.volume += source_candle.volume
-            return
-
-        self._emit_closed_candle(current)
-
-        self._live_candles[source_candle.symbol] = LiveCandle(
-            symbol=source_candle.symbol,
-            bucket_epoch=bucket_epoch,
-            timeframe_seconds=self.timeframe_seconds,
-            open=source_candle.open,
-            high=source_candle.high,
-            low=source_candle.low,
-            close=source_candle.close,
-            volume=source_candle.volume,
-            is_complete=False,
-        )
-
 
 
 
@@ -345,3 +345,71 @@ class CandleManager:
             microsecond=0,
         )
         return int(session_start.timestamp())
+    
+
+
+    def aggregate_closed_candle(self, source_candle: LiveCandle) -> None:
+        if not source_candle.is_complete:
+            return
+
+        if source_candle.timeframe_seconds >= self.timeframe_seconds:
+            return
+
+        if self.timeframe_seconds % source_candle.timeframe_seconds != 0:
+            return
+
+        symbol = source_candle.symbol
+        bucket_epoch = self._get_anchored_bucket_epoch(
+            symbol,
+            source_candle.bucket_epoch,
+            source_candle.timeframe_seconds,
+        )
+        source_close_epoch = source_candle.bucket_epoch + source_candle.timeframe_seconds
+
+        current = self._live_candles.get(symbol)
+        last_closed_bucket = self._last_closed_bucket_by_symbol.get(symbol)
+
+        if last_closed_bucket is not None and bucket_epoch <= last_closed_bucket:
+            return
+
+        if current is None:
+            current = LiveCandle(
+                symbol=symbol,
+                bucket_epoch=bucket_epoch,
+                timeframe_seconds=self.timeframe_seconds,
+                open=source_candle.open,
+                high=source_candle.high,
+                low=source_candle.low,
+                close=source_candle.close,
+                volume=source_candle.volume,
+                is_complete=False,
+            )
+            self._live_candles[symbol] = current
+        else:
+            if bucket_epoch < current.bucket_epoch:
+                return
+
+            if bucket_epoch > current.bucket_epoch:
+                self._emit_closed_candle(current)
+                current = LiveCandle(
+                    symbol=symbol,
+                    bucket_epoch=bucket_epoch,
+                    timeframe_seconds=self.timeframe_seconds,
+                    open=source_candle.open,
+                    high=source_candle.high,
+                    low=source_candle.low,
+                    close=source_candle.close,
+                    volume=source_candle.volume,
+                    is_complete=False,
+                )
+                self._live_candles[symbol] = current
+            else:
+                current.high = max(current.high, source_candle.high)
+                current.low = min(current.low, source_candle.low)
+                current.close = source_candle.close
+                current.volume += source_candle.volume
+
+        current_close_epoch = current.bucket_epoch + current.timeframe_seconds
+        if source_close_epoch >= current_close_epoch:
+            self._emit_closed_candle(current)
+            self._live_candles.pop(symbol, None)

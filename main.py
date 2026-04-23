@@ -322,7 +322,16 @@ def main() -> None:
 
             candles_1m = candle_1m.pop_closed_candles()
             for candle in candles_1m:
-                print("1M CLOSED:", epoch_to_ist_text(candle.bucket_epoch), flush=True)
+                print(
+                        "1M CLOSED:",
+                        f"open={epoch_to_ist_text(candle.bucket_epoch)}",
+                        f"close={epoch_to_ist_text(candle.bucket_epoch + candle.timeframe_seconds)}",
+                        f"O={candle.open} H={candle.high} L={candle.low} C={candle.close}",
+                        flush=True,
+                    )
+                                    
+
+                # print("1M CLOSED:", epoch_to_ist_text(candle.bucket_epoch), flush=True)
                 if last_written_1m is not None and candle.bucket_epoch > last_written_1m + 60:
                     gap_df = backfill_gap_to_csv(
                         broker=broker,
@@ -343,7 +352,16 @@ def main() -> None:
 
             candles_5m = candle_5m.pop_closed_candles()
             for candle in candles_5m:
-                print("5M CLOSED:", epoch_to_ist_text(candle.bucket_epoch), flush=True)
+                print(
+                            "5M CLOSED:",
+                            f"open={epoch_to_ist_text(candle.bucket_epoch)}",
+                            f"close={epoch_to_ist_text(candle.bucket_epoch + candle.timeframe_seconds)}",
+                            f"O={candle.open} H={candle.high} L={candle.low} C={candle.close}",
+                            flush=True,
+                        )
+                                        
+
+                # print("5M CLOSED:", epoch_to_ist_text(candle.bucket_epoch), flush=True)
                 if last_written_5m is not None and candle.bucket_epoch > last_written_5m + 300:
                     gap_df = backfill_gap_to_csv(
                         broker=broker,
