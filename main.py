@@ -314,6 +314,45 @@ def main() -> None:
 
     candle_5s.downstream_managers.append(candle_1m)
 
+
+    def on_5s_gap_detected(
+        *,
+        symbol: str,
+        from_epoch: int,
+        to_epoch: int,
+        timeframe_seconds: int,
+    ) -> None:
+        gap_df = backfill_gap_to_csv(
+            broker=broker,
+            symbol=symbol,
+            resolution="5S",
+            timeframe_seconds=timeframe_seconds,
+            csv_file="candles_5s.csv",
+            last_bucket=from_epoch - timeframe_seconds,
+            next_live_bucket=to_epoch + timeframe_seconds,
+        )
+
+        if gap_df.empty:
+            return
+
+        gap_df = gap_df.rename(columns={"timestamp": "bucket_epoch"})
+
+        gap_candles = build_live_candles_from_csv(
+            gap_df,
+            symbol=symbol,
+            timeframe_seconds=timeframe_seconds,
+        )
+
+        for gap_candle in gap_candles:
+            candle_5s.seed_closed_candle(gap_candle)
+            candle_1m.aggregate_closed_candle(gap_candle)
+
+
+
+    candle_5s.set_gap_callback(on_5s_gap_detected)
+
+
+
     seeded_5s = seed_manager_from_csv(
         manager=candle_5s,
         csv_df=csv_5s,
@@ -378,18 +417,7 @@ def main() -> None:
         while True:
             candles_5s = candle_runner.pop_closed_candles("5s")
             for candle in candles_5s:
-                if last_written_5s is not None and candle.bucket_epoch > last_written_5s + 5:
-                    gap_df = backfill_gap_to_csv(
-                        broker=broker,
-                        symbol=SYMBOL,
-                        resolution="5S",
-                        timeframe_seconds=5,
-                        csv_file="candles_5s.csv",
-                        last_bucket=last_written_5s,
-                        next_live_bucket=candle.bucket_epoch,
-                    )
-                    if not gap_df.empty:
-                        last_written_5s = int(gap_df.iloc[-1]["timestamp"])
+
 
                 if last_written_5s is None or candle.bucket_epoch > last_written_5s:
                     append_candle_to_csv("candles_5s.csv", candle)

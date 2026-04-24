@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections import deque
 from queue import Queue
 from typing import Any
+from time import time
 
 from trading_app.models import LiveCandle, MarketTick
 from datetime import datetime
@@ -190,6 +191,133 @@ class CandleManager:
 
 
 
+    # def process_tick_message(self, message: dict[str, Any]) -> None:
+    #     symbol = str(message.get("symbol", "")).strip()
+    #     if not symbol:
+    #         return
+
+    #     tick = MarketTick.from_message(message)
+    #     if not tick.symbol or tick.exch_feed_time <= 0 or tick.ltp <= 0:
+    #         return
+
+    #     bucket_epoch = self._get_bucket_epoch(tick.symbol, tick.exch_feed_time)
+    #     current = self._live_candles.get(tick.symbol)
+    #     pending = self._pending_closed_candle_by_symbol.get(tick.symbol)
+    #     last_closed_bucket = self._last_closed_bucket_by_symbol.get(tick.symbol)
+
+    #     # 1) pending candle finalize:
+    #     #    - fresh bucket me 2 ticks aa gaye
+    #     #    - ya 1 second grace cross ho gaya
+    #     if pending is not None:
+    #         pending_start = self._pending_close_start_epoch_by_symbol.get(
+    #             tick.symbol,
+    #             pending.bucket_epoch + pending.timeframe_seconds,
+    #         )
+    #         next_bucket_tick_count = self._next_bucket_tick_count_by_symbol.get(
+    #             tick.symbol,
+    #             0,
+    #         )
+
+    #         should_close_pending = False
+
+    #         if bucket_epoch > pending.bucket_epoch and next_bucket_tick_count >= 2:
+    #             should_close_pending = True
+
+    #         if int(time()) >= pending_start + 1:
+    #             should_close_pending = True
+
+    #         if should_close_pending:
+    #             prev_closed_bucket = self._last_closed_bucket_by_symbol.get(tick.symbol)
+
+    #             self._emit_closed_candle(pending)
+
+    #             # gap detect + callback
+    #             if prev_closed_bucket is not None:
+    #                 expected_next_bucket = prev_closed_bucket + self.timeframe_seconds
+    #                 gap_to_bucket = pending.bucket_epoch - self.timeframe_seconds
+
+    #                 if expected_next_bucket <= gap_to_bucket and self._on_gap_detected is not None:
+    #                     self._on_gap_detected(
+    #                         symbol=tick.symbol,
+    #                         from_epoch=expected_next_bucket,
+    #                         to_epoch=gap_to_bucket,
+    #                         timeframe_seconds=self.timeframe_seconds,
+    #                     )
+
+    #             self._pending_closed_candle_by_symbol.pop(tick.symbol, None)
+    #             self._pending_close_start_epoch_by_symbol.pop(tick.symbol, None)
+    #             self._next_bucket_tick_count_by_symbol.pop(tick.symbol, None)
+
+    #             pending = None
+    #             last_closed_bucket = self._last_closed_bucket_by_symbol.get(tick.symbol)
+
+    #     # 2) already closed bucket ka tick ignore
+    #     if last_closed_bucket is not None and bucket_epoch <= last_closed_bucket:
+    #         if self.debug:
+    #             print(
+    #                 "SKIP CLOSED BUCKET TICK:",
+    #                 tick.symbol,
+    #                 bucket_epoch,
+    #                 last_closed_bucket,
+    #                 flush=True,
+    #             )
+    #         return
+
+    #     # 3) late tick pending candle ke bucket ka hai to pending me merge karo
+    #     if pending is not None and bucket_epoch == pending.bucket_epoch:
+    #         pending.update(tick.ltp)
+    #         return
+
+    #     # 4) live candle nahi hai to naya candle start karo
+    #     if current is None:
+    #         self._live_candles[tick.symbol] = self._new_candle_from_tick(
+    #             tick,
+    #             bucket_epoch,
+    #         )
+
+    #         if pending is not None and bucket_epoch > pending.bucket_epoch:
+    #             self._next_bucket_tick_count_by_symbol[tick.symbol] = (
+    #                 self._next_bucket_tick_count_by_symbol.get(tick.symbol, 0) + 1
+    #             )
+    #         return
+
+    #     # 5) purane bucket ka tick ignore
+    #     if bucket_epoch < current.bucket_epoch:
+    #         if self.debug:
+    #             print(
+    #                 "SKIP OLD BUCKET TICK:",
+    #                 tick.symbol,
+    #                 tick.exch_feed_time,
+    #                 bucket_epoch,
+    #                 current.bucket_epoch,
+    #                 flush=True,
+    #             )
+    #         return
+
+    #     # 6) same bucket -> current update
+    #     if bucket_epoch == current.bucket_epoch:
+    #         current.update(tick.ltp)
+
+    #         if pending is not None and bucket_epoch > pending.bucket_epoch:
+    #             self._next_bucket_tick_count_by_symbol[tick.symbol] = (
+    #                 self._next_bucket_tick_count_by_symbol.get(tick.symbol, 0) + 1
+    #             )
+    #         return
+
+    #     # 7) new bucket start -> current ko pending me rakho, naya current start karo
+    #     self._pending_closed_candle_by_symbol[tick.symbol] = current
+    #     self._pending_close_start_epoch_by_symbol[tick.symbol] = (
+    #         current.bucket_epoch + current.timeframe_seconds
+    #     )
+    #     self._next_bucket_tick_count_by_symbol[tick.symbol] = 1
+
+    #     self._live_candles[tick.symbol] = self._new_candle_from_tick(
+    #         tick,
+    #         bucket_epoch,
+    #     )
+
+
+
     def process_tick_message(self, message: dict[str, Any]) -> None:
         symbol = str(message.get("symbol", "")).strip()
         if not symbol:
@@ -204,9 +332,6 @@ class CandleManager:
         pending = self._pending_closed_candle_by_symbol.get(tick.symbol)
         last_closed_bucket = self._last_closed_bucket_by_symbol.get(tick.symbol)
 
-        # 1) pending candle finalize:
-        #    - fresh bucket me 2 ticks aa gaye
-        #    - ya 1 second grace cross ho gaya
         if pending is not None:
             pending_start = self._pending_close_start_epoch_by_symbol.get(
                 tick.symbol,
@@ -222,26 +347,30 @@ class CandleManager:
             if bucket_epoch > pending.bucket_epoch and next_bucket_tick_count >= 2:
                 should_close_pending = True
 
-            if tick.exch_feed_time >= pending_start + 1:
+            if int(time()) >= pending_start + 1:
                 should_close_pending = True
 
             if should_close_pending:
                 prev_closed_bucket = self._last_closed_bucket_by_symbol.get(tick.symbol)
 
-                self._emit_closed_candle(pending)
-
-                # gap detect + callback
+                # gap detect + callback FIRST
                 if prev_closed_bucket is not None:
                     expected_next_bucket = prev_closed_bucket + self.timeframe_seconds
                     gap_to_bucket = pending.bucket_epoch - self.timeframe_seconds
 
-                    if expected_next_bucket <= gap_to_bucket and self._on_gap_detected is not None:
+                    if (
+                        expected_next_bucket <= gap_to_bucket
+                        and self._on_gap_detected is not None
+                    ):
                         self._on_gap_detected(
                             symbol=tick.symbol,
                             from_epoch=expected_next_bucket,
                             to_epoch=gap_to_bucket,
                             timeframe_seconds=self.timeframe_seconds,
                         )
+
+                # THEN emit current pending candle
+                self._emit_closed_candle(pending)
 
                 self._pending_closed_candle_by_symbol.pop(tick.symbol, None)
                 self._pending_close_start_epoch_by_symbol.pop(tick.symbol, None)
@@ -250,7 +379,6 @@ class CandleManager:
                 pending = None
                 last_closed_bucket = self._last_closed_bucket_by_symbol.get(tick.symbol)
 
-        # 2) already closed bucket ka tick ignore
         if last_closed_bucket is not None and bucket_epoch <= last_closed_bucket:
             if self.debug:
                 print(
@@ -262,12 +390,10 @@ class CandleManager:
                 )
             return
 
-        # 3) late tick pending candle ke bucket ka hai to pending me merge karo
         if pending is not None and bucket_epoch == pending.bucket_epoch:
             pending.update(tick.ltp)
             return
 
-        # 4) live candle nahi hai to naya candle start karo
         if current is None:
             self._live_candles[tick.symbol] = self._new_candle_from_tick(
                 tick,
@@ -280,7 +406,6 @@ class CandleManager:
                 )
             return
 
-        # 5) purane bucket ka tick ignore
         if bucket_epoch < current.bucket_epoch:
             if self.debug:
                 print(
@@ -293,7 +418,6 @@ class CandleManager:
                 )
             return
 
-        # 6) same bucket -> current update
         if bucket_epoch == current.bucket_epoch:
             current.update(tick.ltp)
 
@@ -303,7 +427,6 @@ class CandleManager:
                 )
             return
 
-        # 7) new bucket start -> current ko pending me rakho, naya current start karo
         self._pending_closed_candle_by_symbol[tick.symbol] = current
         self._pending_close_start_epoch_by_symbol[tick.symbol] = (
             current.bucket_epoch + current.timeframe_seconds
@@ -314,6 +437,14 @@ class CandleManager:
             tick,
             bucket_epoch,
         )
+
+
+
+
+
+
+
+
 
 
     def pop_closed_candles(self) -> list[LiveCandle]:
@@ -328,6 +459,9 @@ class CandleManager:
     def get_live_candle(self, symbol: str) -> LiveCandle | None:
         return self._live_candles.get(symbol)
     
+
+    def get_last_closed_bucket(self, symbol: str) -> int | None:
+        return self._last_closed_bucket_by_symbol.get(symbol)
 
 
 
