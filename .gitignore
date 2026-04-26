@@ -25,11 +25,12 @@ Thumbs.db
 #Data Files 
 *data_old
 *data
-# Notebooks
-*notebooks
+# # Notebooks
+# *notebooks
 
 #zip files 
 *.zip
 
 #csv files
 *.csv
+*csv_dump
