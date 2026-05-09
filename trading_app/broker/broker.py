@@ -42,22 +42,23 @@ class Broker:
         self._auto_login = auto_login
         self._client: fyersModel.FyersModel | None = None
 
+
     def get_client(self) -> fyersModel.FyersModel:
         """Return authenticated FYERS client."""
         if self._client is None:
             if not self._auto_login:
-                raise RuntimeError(
-                    "FYERS client is not authenticated and auto_login is disabled."
-                )
+                raise RuntimeError("FYERS client is not authenticated and auto_login is disabled.")
             validate_settings()
             self._client = login()
         return self._client
+
 
     def refresh_login(self) -> fyersModel.FyersModel:
         """Refresh FYERS login and return fresh client."""
         validate_settings()
         self._client = login()
         return self._client
+
 
     def get_profile(self) -> dict[str, Any]:
         """Fetch profile response."""
@@ -66,17 +67,9 @@ class Broker:
             raise RuntimeError("Invalid profile response from FYERS.")
         return response
 
-    def get_history(
-        self,
-        symbol: str,
-        resolution: str,
-        date_from: date,
-        date_to: date,
-        *,
-        cont_flag: str = "1",
-        date_format: str = "1",
-        include_live_candle: bool = False,
-    ) -> pd.DataFrame:
+
+    def get_history(self,symbol: str,resolution: str,date_from: date,date_to: date,*,
+                    cont_flag: str = "1",date_format: str = "1",include_live_candle: bool = False,) -> pd.DataFrame:
         """Fetch history using yyyy-mm-dd date range and return DataFrame."""
         payload = {
             "symbol": symbol,
@@ -84,8 +77,7 @@ class Broker:
             "date_format": date_format,
             "range_from": date_from.strftime("%Y-%m-%d"),
             "range_to": date_to.strftime("%Y-%m-%d"),
-            "cont_flag": cont_flag,
-        }
+            "cont_flag": cont_flag,}
 
         response = self.get_client().history(data=payload)
 
@@ -103,16 +95,9 @@ class Broker:
             include_live_candle=include_live_candle,
         )
 
-    def get_history_epoch(
-        self,
-        *,
-        symbol: str,
-        resolution: str,
-        range_from_epoch: int,
-        range_to_epoch: int,
-        cont_flag: str = "1",
-        include_live_candle: bool = False,
-    ) -> pd.DataFrame:
+
+    def get_history_epoch(self,*,symbol: str,resolution: str,range_from_epoch: int,range_to_epoch: int,cont_flag: str = "1",
+                          include_live_candle: bool = False,) -> pd.DataFrame:
         """Fetch history using exact epoch range and return DataFrame."""
         payload = {
             "symbol": symbol,
@@ -139,17 +124,9 @@ class Broker:
             include_live_candle=include_live_candle,
         )
 
-    def get_history_chunked_epoch(
-        self,
-        *,
-        symbol: str,
-        resolution: str,
-        range_from_epoch: int,
-        range_to_epoch: int,
-        cont_flag: str = "1",
-        include_live_candle: bool = False,
-        request_delay: float = 0.34,
-    ) -> pd.DataFrame:
+
+    def get_history_chunked_epoch(self,*,symbol: str,resolution: str,range_from_epoch: int,range_to_epoch: int,cont_flag: str = "1",
+                                  include_live_candle: bool = False,request_delay: float = 0.34,) -> pd.DataFrame:
         """Fetch large epoch range using API-safe chunks and return merged DataFrame."""
         chunks = self._build_history_epoch_chunks(
             range_from_epoch=range_from_epoch,
@@ -184,17 +161,9 @@ class Broker:
 
         return merged
 
-    def get_history_for_symbols(
-        self,
-        *,
-        symbols: list[str],
-        resolution: str,
-        date_from,
-        date_to,
-        cont_flag: str = "1",
-        include_live_candle: bool = False,
-        request_delay: float = 0.34,
-    ) -> dict[str, pd.DataFrame]:
+
+    def get_history_for_symbols(self,*,symbols: list[str], resolution: str,date_from,date_to,cont_flag: str = "1",
+                                include_live_candle: bool = False,request_delay: float = 0.34,) -> dict[str, pd.DataFrame]:
         """Fetch date based history for multiple symbols with throttling."""
         results: dict[str, pd.DataFrame] = {}
 
@@ -213,12 +182,14 @@ class Broker:
 
         return results
 
+
     def get_orderbook(self) -> dict[str, Any]:
         """Fetch orderbook."""
         response = self.get_client().orderbook()
         if not isinstance(response, dict):
             raise RuntimeError("Invalid orderbook response from FYERS.")
         return response
+
 
     def cancel_order(self, order_id: str) -> dict[str, Any]:
         """Cancel order by order id."""
@@ -228,12 +199,14 @@ class Broker:
             raise RuntimeError("Invalid cancel_order response from FYERS.")
         return response
 
+
     def get_positions(self) -> dict[str, Any]:
         """Fetch positions."""
         response = self.get_client().positions()
         if not isinstance(response, dict):
             raise RuntimeError("Invalid positions response from FYERS.")
         return response
+
 
     def get_holdings(self) -> dict[str, Any]:
         """Fetch holdings."""
@@ -242,22 +215,10 @@ class Broker:
             raise RuntimeError("Invalid holdings response from FYERS.")
         return response
 
-    def place_order(
-        self,
-        *,
-        symbol: str,
-        qty: int,
-        side: int,
-        productType: str = "INTRADAY",
-        orderType: int = 2,
-        limitPrice: float = 0,
-        stopPrice: float = 0,
-        validity: str = "DAY",
-        disclosedQty: int = 0,
-        offlineOrder: bool = False,
-        stopLoss: float = 0,
-        takeProfit: float = 0,
-    ) -> dict[str, Any]:
+
+    def place_order(self,*,symbol: str,qty: int,side: int,productType: str = "INTRADAY",orderType: int = 2,limitPrice: float = 0,
+                    stopPrice: float = 0,validity: str = "DAY",disclosedQty: int = 0,offlineOrder: bool = False,stopLoss: float = 0,
+                    takeProfit: float = 0,) -> dict[str, Any]:
         """Place order using FYERS order API."""
         payload = {
             "symbol": symbol,
@@ -280,33 +241,28 @@ class Broker:
 
         return response
 
+
     def get_quotes(self, *, symbols: list[str]) -> dict[str, Any]:
         """Fetch quotes for multiple symbols."""
         client = self.get_client()
 
-        data = {
-            "symbols": ",".join(symbols),
-        }
+        data = {"symbols": ",".join(symbols),}
 
         return client.quotes(data=data)
+
 
     def get_depth(self, *, symbols: list[str], ohlcv_flag: int = 1) -> dict[str, Any]:
         """Fetch depth for symbol list."""
         client = self.get_client()
 
-        data = {
-            "symbol": ",".join(symbols),
-            "ohlcv_flag": str(ohlcv_flag),
-        }
+        data = {"symbol": ",".join(symbols),"ohlcv_flag": str(ohlcv_flag),}
 
         return client.depth(data=data)
 
+
     def get_index_spot_prices(self) -> dict[str, dict[str, float]]:
         """Return spot open and current price for NIFTY and SENSEX."""
-        symbols = [
-            "NSE:NIFTY50-INDEX",
-            "BSE:SENSEX-INDEX",
-        ]
+        symbols = ["NSE:NIFTY50-INDEX","BSE:SENSEX-INDEX",]
 
         response = self.get_quotes(symbols=symbols)
         result: dict[str, dict[str, float]] = {}
@@ -336,6 +292,7 @@ class Broker:
 
         return result
 
+
     def _history_columns(self) -> list[str]:
         """Return standard history DataFrame columns."""
         return [
@@ -348,38 +305,18 @@ class Broker:
             "symbol",
         ]
 
-    def _candles_to_df(
-        self,
-        *,
-        symbol: str,
-        candles: list[list[Any]],
-        resolution: str,
-        include_live_candle: bool,
-    ) -> pd.DataFrame:
+
+    def _candles_to_df(self,*,symbol: str,candles: list[list[Any]],resolution: str,include_live_candle: bool,) -> pd.DataFrame:
         """Convert raw FYERS candle list to standardized DataFrame."""
         if not candles:
             return pd.DataFrame(columns=self._history_columns())
 
-        df = pd.DataFrame(
-            candles,
-            columns=[
-                "timestamp",
-                "open",
-                "high",
-                "low",
-                "close",
-                "volume",
-            ],
-        )
+        df = pd.DataFrame(candles,columns=["timestamp","open","high","low","close","volume",],)
 
         df["timestamp"] = df["timestamp"].astype(int)
         df["symbol"] = symbol
 
-        df = self._filter_history_candles_df(
-            df=df,
-            timeframe_seconds=self._get_resolution_seconds(resolution=resolution),
-            include_live_candle=include_live_candle,
-        )
+        df = self._filter_history_candles_df(df=df,timeframe_seconds=self._get_resolution_seconds(resolution=resolution),include_live_candle=include_live_candle,)
 
         if df.empty:
             return pd.DataFrame(columns=self._history_columns())
@@ -388,9 +325,11 @@ class Broker:
 
         return df
 
+
     def _get_now_epoch(self) -> int:
         """Return current epoch in IST."""
         return int(datetime.now(MARKET_TZ).timestamp())
+
 
     def _get_resolution_seconds(self, *, resolution: str) -> int:
         """Return candle size in seconds for given resolution."""
@@ -438,6 +377,7 @@ class Broker:
 
         raise ValueError(f"Unsupported resolution: {resolution}")
 
+
     def _filter_history_candles_df(
         self,
         *,
@@ -453,6 +393,7 @@ class Broker:
         mask = (df["timestamp"] + timeframe_seconds) <= now_epoch
 
         return df.loc[mask].reset_index(drop=True)
+
 
     def _get_history_chunk_seconds(self, *, resolution: str) -> int:
         """Return maximum epoch window per request for a resolution."""
@@ -483,6 +424,7 @@ class Broker:
 
         raise ValueError(f"Unsupported resolution: {resolution}")
 
+
     def _build_history_epoch_chunks(
         self,
         *,
@@ -505,18 +447,14 @@ class Broker:
 
         return chunks
 
+
     def get_market_start_epoch(self, *, days_back: int) -> int:
         """Return epoch for market open 09:15:00 IST on target day."""
         target_date = (datetime.now(MARKET_TZ) - timedelta(days=days_back)).date()
         start_dt = datetime.combine(target_date, MARKET_OPEN_TIME, tzinfo=MARKET_TZ)
         return int(start_dt.timestamp())
 
-    # def get_completed_range_to_epoch(self, *, resolution: str) -> int:
-    #     """Return safe range_to epoch for completed candles only."""
-    #     now_dt = datetime.now(MARKET_TZ)
-    #     resolution_seconds = self._get_resolution_seconds(resolution=resolution)
-    #     completed_to_dt = now_dt - timedelta(seconds=resolution_seconds)
-    #     return int(completed_to_dt.timestamp())
+
     def get_completed_range_to_epoch(self,*,resolution: str,) -> int:
         resolution_seconds = self._get_resolution_seconds(resolution=resolution)
         now_dt = datetime.now(MARKET_TZ)
@@ -533,9 +471,7 @@ class Broker:
 
         completed_bucket_count = elapsed_seconds // resolution_seconds
 
-        completed_bucket_start = market_open_dt + timedelta(
-                                                        seconds=(completed_bucket_count - 1) * resolution_seconds
-                                                        )
+        completed_bucket_start = market_open_dt + timedelta(seconds=(completed_bucket_count - 1) * resolution_seconds)
 
         completed_range_to_dt = completed_bucket_start + timedelta(seconds=resolution_seconds - 1)
 
