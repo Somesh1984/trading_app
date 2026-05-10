@@ -1,26 +1,27 @@
+
 from __future__ import annotations
 
-from typing import Callable, Iterable
+from typing import Callable, Iterable,TypeAlias
 
 from fyers_apiv3.FyersWebsocket import data_ws, order_ws
 
 from .auth import generate_access_token
-from ..models import LiveCandle, MarketTick
+from ..models import MarketTick
 from ..settings import FYERS_CLIENT_ID, validate_settings
+
+RawMessage = dict[str, object]
+DataMessageHandler = Callable[[RawMessage], None]
+SocketEventHandler = Callable[[object], None]
+SocketOpenHandler = Callable[[], None]
+AnyCallback = Callable[..., None]
 
 
 class FyersWebSocketManager:
-    def __init__(self, candle_seconds: int = 60) -> None:
+    def __init__(self) -> None:
         self._access_token: str | None = None
         self._data_socket = None
         self._order_socket = None
-
         self._latest_ticks: dict[str, MarketTick] = {}
-        self._latest_candles: dict[str, LiveCandle] = {}
-        self._closed_candles: list[LiveCandle] = []
-
-        self._candle_seconds = candle_seconds
-        self._session_start_seconds = 9 * 3600 + 15 * 60  # 09:15
 
     # ---------------------------
     # Public read helpers
@@ -31,20 +32,103 @@ class FyersWebSocketManager:
     def get_all_latest_ticks(self) -> dict[str, MarketTick]:
         return dict(self._latest_ticks)
 
-    def get_latest_candle(self, symbol: str) -> LiveCandle | None:
-        return self._latest_candles.get(symbol)
+    def clear_latest_ticks(self) -> None:
+        self._latest_ticks.clear()
 
-    def get_closed_candles(self) -> list[LiveCandle]:
-        return list(self._closed_candles)
+    # ---------------------------
+    # Internal utility helpers
+    # ---------------------------
+    def _normalize_symbols(self, symbols: Iterable[str]) -> list[str]:
+        return list(
+            dict.fromkeys(
+                str(symbol).strip()
+                for symbol in symbols
+                if str(symbol).strip()
+            )
+        )
 
-    def pop_closed_candles(self) -> list[LiveCandle]:
-        candles = list(self._closed_candles)
-        self._closed_candles.clear()
-        return candles
+    def _run_callback(
+        self,
+        callback: AnyCallback | None,
+        *args,
+    ) -> None:
+        if callback is not None:
+            callback(*args)
 
-    def pop_complete_closed_candles(self) -> list[LiveCandle]:
-        candles = self.pop_closed_candles()
-        return [candle for candle in candles if candle.is_complete]
+    # ---------------------------
+    # Default socket handlers
+    # ---------------------------
+    def _default_data_close(self, message: object) -> None:
+        print("DATA CLOSE:", message, flush=True)
+
+    def _default_data_error(self, message: object) -> None:
+        print("DATA ERROR:", message, flush=True)
+
+    def _default_order_open(self) -> None:
+        print("ORDER SOCKET CONNECTED", flush=True)
+
+    def _default_order_close(self, message: object) -> None:
+        print("ORDER CLOSE:", message, flush=True)
+
+    def _default_order_error(self, message: object) -> None:
+        print("ORDER ERROR:", message, flush=True)
+
+    # ---------------------------
+    # Data socket internal handlers
+    # ---------------------------
+    def _handle_data_message(
+        self,
+        message: dict,
+        callback: DataMessageHandler,
+    ) -> None:
+        self._update_latest_tick(message)
+        self._run_callback(callback, message)
+
+    def _handle_data_open(
+        self,
+        symbols: list[str],
+        data_type: str,
+        callback: SocketOpenHandler | None,
+    ) -> None:
+        if symbols:
+            self._data_socket.subscribe(
+                symbols=symbols,
+                data_type=data_type,
+            )
+
+        self._data_socket.keep_running()
+        self._run_callback(callback)
+
+    def _update_latest_tick(
+        self,
+        message: dict,
+    ) -> MarketTick | None:
+        symbol = str(message.get("symbol", "")).strip()
+
+        if not symbol:
+            return None
+
+        tick = MarketTick.from_message(message)
+        self._latest_ticks[symbol] = tick
+
+        return tick
+
+    # ---------------------------
+    # Order socket internal handlers
+    # ---------------------------
+    def _handle_order_message(
+        self,
+        message: dict,
+        specific_handler: DataMessageHandler | None,
+        general_handler: DataMessageHandler | None,
+        default_label: str,
+    ) -> None:
+        if specific_handler is not None:
+            self._run_callback(specific_handler, message)
+        elif general_handler is not None:
+            self._run_callback(general_handler, message)
+        else:
+            print(f"{default_label}:", message, flush=True)
 
     # ---------------------------
     # Auth / token helpers
@@ -54,110 +138,54 @@ class FyersWebSocketManager:
             validate_settings()
             token = generate_access_token()
             self._access_token = f"{FYERS_CLIENT_ID}:{token}"
-        return self._access_token
 
+        return self._access_token
 
     def refresh_token(self) -> str:
         validate_settings()
         token = generate_access_token(force_refresh=True)
         self._access_token = f"{FYERS_CLIENT_ID}:{token}"
+
         return self._access_token
-
-
-    # ---------------------------
-    # Candle bucket helpers
-    # ---------------------------
-    def _get_bucket_epoch(self, epoch: int) -> int:
-        session_day_start = (epoch // 86400) * 86400
-        session_anchor = session_day_start + self._session_start_seconds
-
-        if epoch < session_anchor:
-            return (epoch // self._candle_seconds) * self._candle_seconds
-
-        offset = epoch - session_anchor
-        return session_anchor + (offset // self._candle_seconds) * self._candle_seconds
-
-    def _is_incomplete_start(self, epoch: int, bucket_epoch: int) -> bool:
-        return epoch != bucket_epoch
-
-    # ---------------------------
-    # Tick / candle state update
-    # ---------------------------
-    def _update_latest_tick(self, message: dict) -> MarketTick | None:
-        symbol = str(message.get("symbol", "")).strip()
-        if not symbol:
-            return None
-
-        tick = MarketTick.from_message(message)
-        self._latest_ticks[symbol] = tick
-        return tick
-
-    def _update_candle_from_tick(self, tick: MarketTick) -> LiveCandle | None:
-        if not tick.symbol or tick.exch_feed_time <= 0:
-            return None
-
-        bucket_epoch = self._get_bucket_epoch(tick.exch_feed_time)
-        current = self._latest_candles.get(tick.symbol)
-
-        if current is None:
-            candle = LiveCandle(
-                symbol=tick.symbol,
-                bucket_epoch=bucket_epoch,
-                timeframe_seconds=self._candle_seconds,
-                open=tick.ltp,
-                high=tick.ltp,
-                low=tick.ltp,
-                close=tick.ltp,
-                volume=1,
-                is_complete=not self._is_incomplete_start(
-                    tick.exch_feed_time, bucket_epoch
-                ),
-            )
-            self._latest_candles[tick.symbol] = candle
-            return candle
-
-        if current.bucket_epoch == bucket_epoch:
-            current.update(tick.ltp)
-            return current
-
-        self._closed_candles.append(current)
-
-        candle = LiveCandle(
-            symbol=tick.symbol,
-            bucket_epoch=bucket_epoch,
-            timeframe_seconds=self._candle_seconds,
-            open=tick.ltp,
-            high=tick.ltp,
-            low=tick.ltp,
-            close=tick.ltp,
-            volume=1,
-            is_complete=True,
-        )
-        self._latest_candles[tick.symbol] = candle
-        return candle
 
     # ---------------------------
     # Subscription helpers
     # ---------------------------
-    def subscribe_symbols(self, symbols: Iterable[str], *, data_type: str = "SymbolUpdate") -> None:
+    def subscribe_symbols(
+        self,
+        symbols: Iterable[str],
+        *,
+        data_type: str = "SymbolUpdate",
+    ) -> None:
         if self._data_socket is None:
             raise RuntimeError("Data socket is not connected yet.")
 
-        unique_symbols = list(dict.fromkeys(str(symbol).strip() for symbol in symbols if str(symbol).strip()))
+        unique_symbols = self._normalize_symbols(symbols)
         if not unique_symbols:
             return
 
-        self._data_socket.subscribe(symbols=unique_symbols, data_type=data_type)
+        self._data_socket.subscribe(
+            symbols=unique_symbols,
+            data_type=data_type,
+        )
 
-    def unsubscribe_symbols(self, symbols: Iterable[str], *, data_type: str = "SymbolUpdate") -> None:
+    def unsubscribe_symbols(
+        self,
+        symbols: Iterable[str],
+        *,
+        data_type: str = "SymbolUpdate",
+    ) -> None:
         if self._data_socket is None:
             raise RuntimeError("Data socket is not connected yet.")
 
-        unique_symbols = list(dict.fromkeys(str(symbol).strip() for symbol in symbols if str(symbol).strip()))
+        unique_symbols = self._normalize_symbols(symbols)
         if not unique_symbols:
             return
 
-        self._data_socket.unsubscribe(symbols=unique_symbols, data_type=data_type)
+        self._data_socket.unsubscribe(
+            symbols=unique_symbols,
+            data_type=data_type,
+        )
 
     # ---------------------------
     # Data socket
@@ -166,30 +194,24 @@ class FyersWebSocketManager:
         self,
         symbols: Iterable[str],
         *,
-        on_message: Callable[[dict], None],
-        on_error: Callable[[object], None] | None = None,
-        on_close: Callable[[object], None] | None = None,
-        on_open: Callable[[], None] | None = None,
+        on_message: DataMessageHandler,
+        on_error: SocketEventHandler | None = None,
+        on_close: SocketEventHandler | None = None,
+        on_open: SocketOpenHandler | None = None,
         litemode: bool = False,
         data_type: str = "SymbolUpdate",
     ):
-        initial_symbols = list(
-            dict.fromkeys(str(symbol).strip() for symbol in symbols if str(symbol).strip())
-        )
+        initial_symbols = self._normalize_symbols(symbols)
 
         def _on_open() -> None:
-            if initial_symbols:
-                self._data_socket.subscribe(symbols=initial_symbols, data_type=data_type)
-            self._data_socket.keep_running()
-
-            if on_open is not None:
-                on_open()
+            self._handle_data_open(
+                initial_symbols,
+                data_type,
+                on_open,
+            )
 
         def _on_message(message: dict) -> None:
-            tick = self._update_latest_tick(message)
-            if tick is not None:
-                self._update_candle_from_tick(tick)
-            on_message(message)
+            self._handle_data_message(message, on_message)
 
         self._data_socket = data_ws.FyersDataSocket(
             access_token=self._get_ws_token(),
@@ -198,13 +220,20 @@ class FyersWebSocketManager:
             write_to_file=False,
             reconnect=True,
             on_connect=_on_open,
-            on_close=on_close or (lambda message: print("DATA CLOSE:", message, flush=True)),
-            on_error=on_error or (lambda message: print("DATA ERROR:", message, flush=True)),
+            on_close=on_close or self._default_data_close,
+            on_error=on_error or self._default_data_error,
             on_message=_on_message,
         )
 
         self._data_socket.connect()
         return self._data_socket
+
+    def disconnect_data_socket(self) -> None:
+        if self._data_socket is not None:
+            self._data_socket.close_connection()
+            self._data_socket = None
+
+        self.clear_latest_ticks()
 
     # ---------------------------
     # Order socket
@@ -212,45 +241,45 @@ class FyersWebSocketManager:
     def connect_order_socket(
         self,
         *,
-        on_order: Callable[[dict], None] | None = None,
-        on_trade: Callable[[dict], None] | None = None,
-        on_position: Callable[[dict], None] | None = None,
-        on_general: Callable[[dict], None] | None = None,
-        on_error: Callable[[object], None] | None = None,
-        on_close: Callable[[object], None] | None = None,
-        on_open: Callable[[], None] | None = None,
+        on_order: DataMessageHandler | None = None,
+        on_trade: DataMessageHandler | None = None,
+        on_position: DataMessageHandler | None = None,
+        on_general: DataMessageHandler | None = None,
+        on_error: SocketEventHandler | None = None,
+        on_close: SocketEventHandler | None = None,
+        on_open: SocketOpenHandler | None = None,
     ):
         def _on_orders(message: dict) -> None:
-            if on_order is not None:
-                on_order(message)
-            elif on_general is not None:
-                on_general(message)
-            else:
-                print("ORDER UPDATE:", message, flush=True)
+            self._handle_order_message(
+                message,
+                on_order,
+                on_general,
+                "ORDER UPDATE",
+            )
 
         def _on_trades(message: dict) -> None:
-            if on_trade is not None:
-                on_trade(message)
-            elif on_general is not None:
-                on_general(message)
-            else:
-                print("TRADE UPDATE:", message, flush=True)
+            self._handle_order_message(
+                message,
+                on_trade,
+                on_general,
+                "TRADE UPDATE",
+            )
 
         def _on_positions(message: dict) -> None:
-            if on_position is not None:
-                on_position(message)
-            elif on_general is not None:
-                on_general(message)
-            else:
-                print("POSITION UPDATE:", message, flush=True)
+            self._handle_order_message(
+                message,
+                on_position,
+                on_general,
+                "POSITION UPDATE",
+            )
 
         self._order_socket = order_ws.FyersOrderSocket(
             access_token=self._get_ws_token(),
             write_to_file=False,
             log_path="",
-            on_connect=on_open or (lambda: print("ORDER SOCKET CONNECTED", flush=True)),
-            on_close=on_close or (lambda message: print("ORDER CLOSE:", message, flush=True)),
-            on_error=on_error or (lambda message: print("ORDER ERROR:", message, flush=True)),
+            on_connect=on_open or self._default_order_open,
+            on_close=on_close or self._default_order_close,
+            on_error=on_error or self._default_order_error,
             on_orders=_on_orders,
             on_trades=_on_trades,
             on_positions=_on_positions,
@@ -258,3 +287,9 @@ class FyersWebSocketManager:
 
         self._order_socket.connect()
         return self._order_socket
+
+    def disconnect_order_socket(self) -> None:
+        if self._order_socket is not None:
+            self._order_socket.close_connection()
+            self._order_socket = None
+

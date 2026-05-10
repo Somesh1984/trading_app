@@ -3,9 +3,9 @@ from __future__ import annotations
 import threading
 import time
 from queue import Empty, Queue
-from typing import Any
 
 from trading_app.broker.candle_manager import CandleManager
+from trading_app.broker.websocket import RawMessage
 from trading_app.models import LiveCandle
 
 
@@ -22,7 +22,7 @@ class CandleRunner:
     def __init__(
         self,
         *,
-        tick_queue: Queue[dict[str, Any]],
+        tick_queue: Queue[RawMessage],
         candle_managers: dict[str, CandleManager],
         poll_interval: float = 0.05,
     ) -> None:
@@ -39,50 +39,82 @@ class CandleRunner:
 
     def _run(self) -> None:
         while not self._stop_event.is_set():
-            processed_any = False
+            processed_any = self._drain_tick_queue()
 
-            while True:
-                try:
-                    message = self.tick_queue.get_nowait()
-                except Empty:
-                    break
-
-                processed_any = True
-
-                for manager in self.candle_managers.values():
-                    manager.process_tick_message(message)
-
-            for name, manager in self.candle_managers.items():
-                candles = manager.pop_closed_candles()
-                for candle in candles:
-                    self.closed_candle_queues[name].put(candle)
+            self._drain_closed_candles()
 
             if not processed_any:
                 time.sleep(self.poll_interval)
 
+    def _drain_tick_queue(self) -> bool:
+        processed_any = False
+
+        while True:
+            try:
+                message = self.tick_queue.get_nowait()
+            except Empty:
+                break
+
+            processed_any = True
+
+            for manager in self.candle_managers.values():
+                manager.process_tick_message(message)
+
+        return processed_any
+
+    def _drain_closed_candles(self) -> None:
+        for name, manager in self.candle_managers.items():
+            candles = manager.pop_closed_candles()
+
+            for candle in candles:
+                self.closed_candle_queues[name].put(candle)
+
     def start(self) -> None:
-        if self._thread is not None and self._thread.is_alive():
+        if self.is_alive():
             return
 
         self._stop_event.clear()
+
         self._thread = threading.Thread(
             target=self._run,
-            name="candle-runner-thread",
+            name="CandleRunner",
             daemon=True,
         )
+
         self._thread.start()
 
     def stop(self) -> None:
         self._stop_event.set()
 
-    def is_alive(self) -> bool:
-        return self._thread is not None and self._thread.is_alive()
+        try:
+            if (
+                self._thread is not None
+                and self._thread is not threading.current_thread()
+            ):
+                self._thread.join(timeout=2)
 
-    def pop_closed_candles(self, name: str) -> list[LiveCandle]:
+        finally:
+            self._thread = None
+
+    def is_alive(self) -> bool:
+        return (
+            self._thread is not None
+            and self._thread.is_alive()
+        )
+
+    def pop_closed_candles(
+        self,
+        name: str,
+    ) -> list[LiveCandle]:
         queue = self.closed_candle_queues[name]
+
         candles: list[LiveCandle] = []
 
-        while not queue.empty():
-            candles.append(queue.get())
+        while True:
+            try:
+                candles.append(queue.get_nowait())
+
+            except Empty:
+                break
 
         return candles
