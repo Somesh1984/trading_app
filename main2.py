@@ -30,6 +30,12 @@ GAP_BACKFILL_RETRY_DELAY = float(os.getenv("GAP_BACKFILL_RETRY_DELAY", "1"))
 REPAIR_1M_INTERVAL_SECONDS = float(os.getenv("REPAIR_1M_INTERVAL_SECONDS", "60"))
 REPAIR_1M_LOOKBACK_MINUTES = int(os.getenv("REPAIR_1M_LOOKBACK_MINUTES", "10"))
 REPAIR_1M_USE_API = os.getenv("REPAIR_1M_USE_API", "1") == "1"
+REPAIR_1M_START_DELAY_SECONDS = float(
+    os.getenv("REPAIR_1M_START_DELAY_SECONDS", "120")
+)
+REPAIR_1M_API_MIN_AGE_SECONDS = float(
+    os.getenv("REPAIR_1M_API_MIN_AGE_SECONDS", "90")
+)
 
 
 def epoch_to_ist_text(epoch: int) -> str:
@@ -423,6 +429,78 @@ def sync_csv_from_history(
     return updated_df
 
 
+def catch_up_5s_history_to_common_bucket(
+    *,
+    broker: Broker,
+    symbols: list[str],
+    csv_file: str,
+    csv_5s_by_symbol: dict[str, pd.DataFrame],
+) -> int:
+    range_to_epoch = broker.get_completed_range_to_epoch(resolution="5S")
+    target_bucket = (range_to_epoch // 5) * 5
+    total_filled = 0
+
+    print(
+        "STARTUP COMMON 5S CATCHUP:",
+        f"target={epoch_to_ist_text(target_bucket)}",
+        flush=True,
+    )
+
+    for index, symbol in enumerate(symbols, start=1):
+        existing_df = read_existing_csv(csv_file, symbol)
+        last_bucket = (
+            None if existing_df.empty else int(existing_df.iloc[-1]["bucket_epoch"])
+        )
+
+        if last_bucket is not None and last_bucket >= target_bucket:
+            csv_5s_by_symbol[symbol] = existing_df.tail(MIN_5S_CANDLES)
+            continue
+
+        range_from_epoch = 0 if last_bucket is None else last_bucket + 5
+
+        hist_df = fetch_history_range(
+            broker=broker,
+            symbol=symbol,
+            resolution="5S",
+            range_from_epoch=range_from_epoch,
+            range_to_epoch=range_to_epoch,
+        )
+
+        existing_buckets = (
+            set()
+            if existing_df.empty
+            else set(existing_df["bucket_epoch"].astype(int))
+        )
+        new_rows = append_history_5s_rows_to_csv(
+            csv_file=csv_file,
+            symbol=symbol,
+            hist_df=hist_df,
+            existing_buckets=existing_buckets,
+        )
+        total_filled += len(new_rows)
+
+        updated_df = read_existing_csv(csv_file, symbol).tail(MIN_5S_CANDLES)
+        csv_5s_by_symbol[symbol] = updated_df
+
+        if new_rows:
+            print(
+                f"STARTUP COMMON 5S CATCHUP {index}/{len(symbols)}:",
+                f"symbol={symbol}",
+                f"filled={len(new_rows)}",
+                f"last={epoch_to_ist_text(int(updated_df.iloc[-1]['bucket_epoch']))}",
+                flush=True,
+            )
+
+    print(
+        "STARTUP COMMON 5S CATCHUP DONE:",
+        f"filled={total_filled}",
+        f"target={epoch_to_ist_text(target_bucket)}",
+        flush=True,
+    )
+
+    return total_filled
+
+
 def seed_manager_from_csv(
     *,
     manager: CandleManager,
@@ -505,6 +583,7 @@ def repair_recent_1m_from_5s(
     now_epoch: int,
     lookback_minutes: int,
     use_api: bool,
+    min_age_seconds: float = 0,
 ) -> tuple[int, int, int]:
     if lookback_minutes <= 0:
         return 0, 0, 0
@@ -530,7 +609,8 @@ def repair_recent_1m_from_5s(
     else:
         existing_1m_keys = get_existing_1m_keys(one_m_csv)
 
-    latest_completed_minute = (now_epoch // 60) * 60 - 60
+    repairable_epoch = int(now_epoch - min_age_seconds)
+    latest_completed_minute = (repairable_epoch // 60) * 60 - 60
     earliest_minute = latest_completed_minute - ((lookback_minutes - 1) * 60)
 
     repaired_1m = 0
@@ -621,6 +701,8 @@ def repair_recent_1m_from_5s(
 
 def main() -> None:
     broker = Broker()
+    stream = MarketStream(symbols=SYMBOLS)
+    stream.start()
 
     csv_5s_by_symbol: dict[str, pd.DataFrame] = {}
 
@@ -629,6 +711,7 @@ def main() -> None:
         f"delay={STARTUP_HISTORY_REQUEST_DELAY}s",
         flush=True,
     )
+    print("MARKET STREAM STARTED EARLY", flush=True)
 
     for index, symbol in enumerate(SYMBOLS, start=1):
         print(
@@ -647,6 +730,13 @@ def main() -> None:
 
         if index < len(SYMBOLS) and STARTUP_HISTORY_REQUEST_DELAY > 0:
             time.sleep(STARTUP_HISTORY_REQUEST_DELAY)
+
+    startup_catchup_5s = catch_up_5s_history_to_common_bucket(
+        broker=broker,
+        symbols=SYMBOLS,
+        csv_file="candles_5s.csv",
+        csv_5s_by_symbol=csv_5s_by_symbol,
+    )
 
     startup_epoch = int(time.time())
     startup_completed_5s_bucket = (startup_epoch // 5) * 5 - 5
@@ -809,11 +899,8 @@ def main() -> None:
     print(f"REPLAYED 5S TO 1M: {replayed_5s_total}", flush=True)
     print(f"SEEDED 1M FROM 5S REPLAY: {len(replayed_1m_candles)}", flush=True)
     print(f"BUILT 1M FROM 5S CSV: {built_1m_from_5s_csv}", flush=True)
-
-    stream = MarketStream(symbols=SYMBOLS)
-    stream.start()
-
-    time.sleep(1)
+    print(f"STARTUP CATCHUP 5S FILLED: {startup_catchup_5s}", flush=True)
+    print("QUEUED TICKS BEFORE RUNNER:", stream.tick_queue.qsize(), flush=True)
 
     candle_runner = CandleRunner(
         tick_queue=stream.tick_queue,
@@ -836,8 +923,15 @@ def main() -> None:
 
     total_written_5s = 0
     total_written_1m = 0
-    last_status_time = time.time()
-    last_repair_time = 0.0
+    runner_start_time = time.time()
+    last_status_time = runner_start_time
+    last_status_total_5s = 0
+    last_status_total_1m = 0
+    last_status_raw_messages = 0
+    last_status_tick_messages = 0
+    last_repair_time = runner_start_time
+    repair_start_time = runner_start_time + REPAIR_1M_START_DELAY_SECONDS
+    last_immediate_repair_minute: int | None = None
 
     try:
         while True:
@@ -860,25 +954,26 @@ def main() -> None:
             written_1m = 0
 
             for candle in candles_1m:
-                print(
-                    "1M CLOSED:",
-                    f"symbol={candle.symbol}",
-                    f"open={epoch_to_ist_text(candle.bucket_epoch)}",
-                    f"close={epoch_to_ist_text(candle.bucket_epoch + candle.timeframe_seconds)}",
-                    f"O={candle.open} H={candle.high} L={candle.low} C={candle.close}",
-                    flush=True,
-                )
-
                 last_written = last_written_1m_by_symbol.get(candle.symbol)
 
                 if last_written is None or candle.bucket_epoch > last_written:
                     append_candle_to_csv("candles_1m.csv", candle)
                     last_written_1m_by_symbol[candle.symbol] = candle.bucket_epoch
                     written_1m += 1
+                    print(
+                        "1M CLOSED:",
+                        f"symbol={candle.symbol}",
+                        f"open={epoch_to_ist_text(candle.bucket_epoch)}",
+                        f"close={epoch_to_ist_text(candle.bucket_epoch + candle.timeframe_seconds)}",
+                        f"O={candle.open} H={candle.high} L={candle.low} C={candle.close}",
+                        flush=True,
+                    )
 
             total_written_1m += written_1m
 
             fallback_written_1m = 0
+            immediate_repaired_1m = 0
+            immediate_repaired_5s = 0
 
             if written_5s_buckets:
                 min_minute_epoch = (min(written_5s_buckets) // 60) * 60
@@ -900,8 +995,50 @@ def main() -> None:
                     }
 
             now = time.time()
+            minute_close_buckets = [
+                bucket_epoch
+                for bucket_epoch in written_5s_buckets
+                if bucket_epoch % 60 == 55
+            ]
 
-            if now - last_repair_time >= REPAIR_1M_INTERVAL_SECONDS:
+            if minute_close_buckets:
+                latest_closed_minute = (max(minute_close_buckets) // 60) * 60
+
+                if latest_closed_minute != last_immediate_repair_minute:
+                    (
+                        immediate_repaired_1m,
+                        immediate_repaired_5s,
+                        _,
+                    ) = repair_recent_1m_from_5s(
+                        broker=broker,
+                        symbols=SYMBOLS,
+                        five_s_csv="candles_5s.csv",
+                        one_m_csv="candles_1m.csv",
+                        now_epoch=int(now),
+                        lookback_minutes=2,
+                        use_api=False,
+                    )
+
+                    if immediate_repaired_5s:
+                        last_written_5s_by_symbol = {
+                            symbol: get_last_csv_bucket("candles_5s.csv", symbol)
+                            for symbol in SYMBOLS
+                        }
+
+                    if immediate_repaired_1m:
+                        total_written_1m += immediate_repaired_1m
+                        last_written_1m_by_symbol = {
+                            symbol: get_last_csv_bucket("candles_1m.csv", symbol)
+                            for symbol in SYMBOLS
+                        }
+
+                    last_repair_time = now
+                    last_immediate_repair_minute = latest_closed_minute
+
+            if (
+                now >= repair_start_time
+                and now - last_repair_time >= REPAIR_1M_INTERVAL_SECONDS
+            ):
                 repaired_1m, repaired_5s, _ = repair_recent_1m_from_5s(
                     broker=broker,
                     symbols=SYMBOLS,
@@ -910,6 +1047,7 @@ def main() -> None:
                     now_epoch=int(now),
                     lookback_minutes=REPAIR_1M_LOOKBACK_MINUTES,
                     use_api=REPAIR_1M_USE_API,
+                    min_age_seconds=REPAIR_1M_API_MIN_AGE_SECONDS,
                 )
 
                 if repaired_5s:
@@ -928,22 +1066,42 @@ def main() -> None:
                 last_repair_time = now
 
             if now - last_status_time >= LIVE_STATUS_INTERVAL_SECONDS:
+                interval_5s = total_written_5s - last_status_total_5s
+                interval_1m = total_written_1m - last_status_total_1m
+                interval_raw = stream.raw_message_count - last_status_raw_messages
+                interval_ticks = (
+                    stream.tick_message_count - last_status_tick_messages
+                )
+                last_msg_age = (
+                    None
+                    if stream.last_message_time is None
+                    else round(now - stream.last_message_time, 2)
+                )
+
                 print(
                     "LIVE STATUS:",
-                    f"stream_thread_alive={stream.is_alive()}",
                     f"stream_connected={stream.is_connected()}",
                     f"tick_queue={stream.tick_queue.qsize()}",
-                    f"raw_messages={stream.raw_message_count}",
-                    f"tick_messages={stream.tick_message_count}",
+                    f"last_msg_age={last_msg_age}",
+                    f"interval_raw={interval_raw}",
+                    f"interval_ticks={interval_ticks}",
                     f"latest_ticks={stream.latest_tick_count()}",
-                    f"written_5s={written_5s}",
-                    f"written_1m={written_1m}",
-                    f"fallback_1m={fallback_written_1m}",
+                    f"interval_5s={interval_5s}",
+                    f"interval_1m={interval_1m}",
+                    f"loop_5s={written_5s}",
+                    f"loop_1m={written_1m}",
+                    f"loop_fallback_1m={fallback_written_1m}",
+                    f"immediate_1m={immediate_repaired_1m}",
+                    f"immediate_5s={immediate_repaired_5s}",
                     f"total_5s={total_written_5s}",
                     f"total_1m={total_written_1m}",
                     flush=True,
                 )
                 last_status_time = now
+                last_status_total_5s = total_written_5s
+                last_status_total_1m = total_written_1m
+                last_status_raw_messages = stream.raw_message_count
+                last_status_tick_messages = stream.tick_message_count
 
             time.sleep(0.1)
 
