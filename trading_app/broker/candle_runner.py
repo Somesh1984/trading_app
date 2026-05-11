@@ -41,6 +41,7 @@ class CandleRunner:
         while not self._stop_event.is_set():
             processed_any = self._drain_tick_queue()
 
+            self._close_due_candles()
             self._drain_closed_candles()
 
             if not processed_any:
@@ -68,6 +69,12 @@ class CandleRunner:
 
             for candle in candles:
                 self.closed_candle_queues[name].put(candle)
+
+    def _close_due_candles(self) -> None:
+        now_epoch = int(time.time())
+
+        for manager in self.candle_managers.values():
+            manager.close_due_candles(now_epoch)
 
     def start(self) -> None:
         if self.is_alive():

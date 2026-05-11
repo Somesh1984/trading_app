@@ -11,7 +11,7 @@ from trading_app.models import LiveCandle, MarketTick
 
 
 IST = ZoneInfo("Asia/Kolkata")
-GapCallback = Callable[[str, int, int, int], None]
+GapCallback = Callable[[str, int, int, int], bool]
 
 
 class CandleManager:
@@ -21,10 +21,12 @@ class CandleManager:
         timeframe_seconds: int,
         startup_epoch: int | None = None,
         allow_partial_bucket: bool = True,
+        close_grace_seconds: int = 1,
         debug: bool = False,
     ) -> None:
         self.timeframe_seconds = timeframe_seconds
         self.allow_partial_bucket = allow_partial_bucket
+        self.close_grace_seconds = close_grace_seconds
         self.debug = debug
 
         self.downstream_managers: list["CandleManager"] = []
@@ -322,7 +324,8 @@ class CandleManager:
             return False
 
         if self._is_partial_bucket(candle.symbol, candle.bucket_epoch):
-            return False
+            self._last_closed_bucket_by_symbol[candle.symbol] = candle.bucket_epoch
+            return True
 
         last_closed = self._last_closed_bucket_by_symbol.get(candle.symbol)
 
@@ -337,12 +340,20 @@ class CandleManager:
 
             if candle.bucket_epoch > expected_bucket:
                 if self._on_gap_detected is not None:
-                    self._on_gap_detected(
+                    gap_filled = self._on_gap_detected(
                         candle.symbol,
                         expected_bucket,
                         candle.bucket_epoch - self.timeframe_seconds,
                         self.timeframe_seconds,
                     )
+                    if not gap_filled and self.debug:
+                        print(
+                            "CONTINUE AFTER GAP MISS:",
+                            candle.symbol,
+                            expected_bucket,
+                            candle.bucket_epoch,
+                            flush=True,
+                        )
 
                 self._emit_closed_candle(candle)
                 return True
@@ -386,6 +397,46 @@ class CandleManager:
 
         return list(candles)
 
+    def close_due_candles(self, now_epoch: int | None = None) -> int:
+        if now_epoch is None:
+            now_epoch = int(time())
+
+        closed_count = 0
+
+        for symbol, pending in list(self._pending_closed_candle_by_symbol.items()):
+            close_after_epoch = (
+                pending.bucket_epoch
+                + pending.timeframe_seconds
+                + self.close_grace_seconds
+            )
+
+            if now_epoch < close_after_epoch:
+                continue
+
+            pending.is_complete = True
+
+            if self.accept_closed_base_candle(pending):
+                self._clear_pending_state(symbol)
+                closed_count += 1
+
+        for symbol, current in list(self._live_candles.items()):
+            close_after_epoch = (
+                current.bucket_epoch
+                + current.timeframe_seconds
+                + self.close_grace_seconds
+            )
+
+            if now_epoch < close_after_epoch:
+                continue
+
+            current.is_complete = True
+
+            if self.accept_closed_base_candle(current):
+                self._live_candles.pop(symbol, None)
+                closed_count += 1
+
+        return closed_count
+
     def _try_close_pending_candle(
         self,
         tick: MarketTick,
@@ -405,7 +456,7 @@ class CandleManager:
             bucket_epoch > pending.bucket_epoch and next_bucket_tick_count >= 2
         )
 
-        if int(time()) >= pending_start + 1:
+        if int(time()) >= pending_start + self.close_grace_seconds:
             should_close_pending = True
 
         if not should_close_pending:
@@ -413,6 +464,9 @@ class CandleManager:
 
         pending.is_complete = True
         accepted = self.accept_closed_base_candle(pending)
+
+        if not accepted:
+            return pending
 
         self._clear_pending_state(tick.symbol)
 
