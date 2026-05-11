@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import threading
+import time
 from queue import Queue
 
 from trading_app.broker.websocket import (
@@ -12,6 +13,7 @@ from trading_app.broker.websocket import (
 
 DEFAULT_DATA_TYPE = "SymbolUpdate"
 DEFAULT_LITEMODE = False
+RAW_DEBUG_MESSAGE_LIMIT = 5
 
 
 class MarketStream:
@@ -28,9 +30,29 @@ class MarketStream:
         self.ws = FyersWebSocketManager()
         self.tick_queue: Queue[RawMessage] = Queue()
         self._thread: threading.Thread | None = None
+        self.raw_message_count = 0
+        self.tick_message_count = 0
+        self.last_message_time: float | None = None
 
     def _on_data(self, message: RawMessage) -> None:
-        self.tick_queue.put(dict(message))
+        raw_message = dict(message)
+        self.raw_message_count += 1
+        self.last_message_time = time.time()
+
+        if self.raw_message_count <= RAW_DEBUG_MESSAGE_LIMIT:
+            print("Market stream raw message:", raw_message, flush=True)
+
+        if raw_message.get("symbol") and raw_message.get("ltp"):
+            self.tick_message_count += 1
+
+        self.tick_queue.put(raw_message)
+
+    def _on_open(self) -> None:
+        print(
+            "Market stream websocket connected:",
+            f"symbols={len(self.symbols)}",
+            flush=True,
+        )
 
     def _on_error(self, error: object) -> None:
         print("Market stream websocket error:", error, flush=True)
@@ -44,6 +66,7 @@ class MarketStream:
             on_message=self._on_data,
             on_error=self._on_error,
             on_close=self._on_close,
+            on_open=self._on_open,
             litemode=DEFAULT_LITEMODE,
             data_type=DEFAULT_DATA_TYPE,
         )
@@ -78,3 +101,9 @@ class MarketStream:
             self._thread is not None
             and self._thread.is_alive()
         )
+
+    def is_connected(self) -> bool:
+        return self.ws.is_data_connected()
+
+    def latest_tick_count(self) -> int:
+        return self.ws.get_latest_tick_count()

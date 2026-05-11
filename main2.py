@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import os
+import threading
 import time
 from datetime import datetime
+from queue import Queue
 from zoneinfo import ZoneInfo
 
 import pandas as pd
@@ -19,6 +21,12 @@ SYMBOLS = nifty_50
 IST = ZoneInfo("Asia/Kolkata")
 
 MIN_5S_CANDLES = 180
+STARTUP_HISTORY_REQUEST_DELAY = float(
+    os.getenv("STARTUP_HISTORY_REQUEST_DELAY", "0.35")
+)
+LIVE_STATUS_INTERVAL_SECONDS = float(
+    os.getenv("LIVE_STATUS_INTERVAL_SECONDS", "5")
+)
 
 
 def epoch_to_ist_text(epoch: int) -> str:
@@ -88,6 +96,7 @@ def get_last_csv_bucket(filename: str, symbol: str) -> int | None:
     df = read_existing_csv(filename, symbol)
     if df.empty:
         return None
+
     return int(df.iloc[-1]["bucket_epoch"])
 
 
@@ -153,7 +162,9 @@ def sync_csv_from_history(
     min_required_count: int,
 ) -> pd.DataFrame:
     existing_df = read_existing_csv(csv_file, symbol)
-    last_csv_bucket = None if existing_df.empty else int(existing_df.iloc[-1]["bucket_epoch"])
+    last_csv_bucket = (
+        None if existing_df.empty else int(existing_df.iloc[-1]["bucket_epoch"])
+    )
 
     range_to_epoch = broker.get_completed_range_to_epoch(resolution=resolution)
 
@@ -176,6 +187,13 @@ def sync_csv_from_history(
             existing_first_bucket = int(existing_df.iloc[0]["bucket_epoch"])
             range_from_epoch = min(existing_first_bucket, earliest_needed_bucket)
             range_from_epoch = max(0, range_from_epoch)
+
+    print(
+        f"CSV SYNC START {resolution}: symbol={symbol} "
+        f"from={epoch_to_ist_text(range_from_epoch)} "
+        f"to={epoch_to_ist_text(range_to_epoch)}",
+        flush=True,
+    )
 
     hist_df = fetch_history_range(
         broker=broker,
@@ -243,6 +261,7 @@ def seed_manager_from_csv(
         symbol=symbol,
         timeframe_seconds=timeframe_seconds,
     )
+
     return manager.seed_closed_candles(candles)
 
 
@@ -306,7 +325,17 @@ def main() -> None:
 
     csv_5s_by_symbol: dict[str, pd.DataFrame] = {}
 
-    for symbol in SYMBOLS:
+    print(
+        f"STARTUP HISTORY SYNC: symbols={len(SYMBOLS)} "
+        f"delay={STARTUP_HISTORY_REQUEST_DELAY}s",
+        flush=True,
+    )
+
+    for index, symbol in enumerate(SYMBOLS, start=1):
+        print(
+            f"STARTUP HISTORY SYMBOL {index}/{len(SYMBOLS)}: {symbol}",
+            flush=True,
+        )
         csv_5s_by_symbol[symbol] = sync_csv_from_history(
             broker=broker,
             symbol=symbol,
@@ -317,7 +346,11 @@ def main() -> None:
             min_required_count=MIN_5S_CANDLES,
         )
 
+        if index < len(SYMBOLS) and STARTUP_HISTORY_REQUEST_DELAY > 0:
+            time.sleep(STARTUP_HISTORY_REQUEST_DELAY)
+
     startup_epoch = int(time.time())
+    startup_completed_5s_bucket = (startup_epoch // 5) * 5 - 5
 
     candle_5s = CandleManager(
         timeframe_seconds=5,
@@ -332,44 +365,88 @@ def main() -> None:
 
     candle_5s.downstream_managers.append(candle_1m)
 
+    gap_queue: Queue[tuple[str, int, int, int]] = Queue()
+    pending_gap_requests: set[tuple[str, int, int, int]] = set()
+    gap_lock = threading.Lock()
+
     def on_5s_gap_detected(
-        *,
         symbol: str,
         from_epoch: int,
         to_epoch: int,
         timeframe_seconds: int,
     ) -> None:
-        gap_df = backfill_gap_to_csv(
-            broker=broker,
-            symbol=symbol,
-            resolution="5S",
-            timeframe_seconds=timeframe_seconds,
-            csv_file="candles_5s.csv",
-            last_bucket=from_epoch - timeframe_seconds,
-            next_live_bucket=to_epoch + timeframe_seconds,
-        )
-
-        if gap_df.empty:
+        if from_epoch <= startup_completed_5s_bucket:
             return
 
-        gap_df = gap_df.rename(columns={"timestamp": "bucket_epoch"})
+        if gap_queue.qsize() > 100:
+            return
 
-        gap_candles = build_live_candles_from_csv(
-            gap_df,
-            symbol=symbol,
-            timeframe_seconds=timeframe_seconds,
+        gap_key = (
+            symbol,
+            from_epoch,
+            to_epoch,
+            timeframe_seconds,
         )
 
-        for gap_candle in gap_candles:
-            candle_5s.seed_closed_candle(gap_candle)
-            candle_1m.aggregate_closed_candle(gap_candle)
+        with gap_lock:
+            if gap_key in pending_gap_requests:
+                return
+
+            pending_gap_requests.add(gap_key)
+
+        gap_queue.put(gap_key)
+
+    def run_gap_worker() -> None:
+        while True:
+            symbol, from_epoch, to_epoch, timeframe_seconds = gap_queue.get()
+            gap_key = (
+                symbol,
+                from_epoch,
+                to_epoch,
+                timeframe_seconds,
+            )
+
+            try:
+                gap_df = backfill_gap_to_csv(
+                    broker=broker,
+                    symbol=symbol,
+                    resolution="5S",
+                    timeframe_seconds=timeframe_seconds,
+                    csv_file="candles_5s.csv",
+                    last_bucket=from_epoch - timeframe_seconds,
+                    next_live_bucket=to_epoch + timeframe_seconds,
+                )
+
+                if gap_df.empty:
+                    continue
+
+                gap_df = gap_df.rename(columns={"timestamp": "bucket_epoch"})
+
+                gap_candles = build_live_candles_from_csv(
+                    gap_df,
+                    symbol=symbol,
+                    timeframe_seconds=timeframe_seconds,
+                )
+
+                for gap_candle in gap_candles:
+                    candle_5s.replay_closed_candle(gap_candle)
+
+            finally:
+                with gap_lock:
+                    pending_gap_requests.discard(gap_key)
 
     candle_5s.set_gap_callback(on_5s_gap_detected)
 
+    gap_worker_thread = threading.Thread(
+        target=run_gap_worker,
+        name="GapWorker",
+        daemon=True,
+    )
+    gap_worker_thread.start()
+
     seeded_5s_total = 0
     replayed_5s_total = 0
-
-    replay_cutoff_epoch = startup_epoch - 1
+    replay_cutoff_epoch = startup_completed_5s_bucket
 
     for symbol, csv_5s in csv_5s_by_symbol.items():
         seeded_5s_total += seed_manager_from_csv(
@@ -387,6 +464,7 @@ def main() -> None:
 
         for candle in seeded_5s_candles:
             candle_close_epoch = candle.bucket_epoch + candle.timeframe_seconds
+
             if candle_close_epoch <= replay_cutoff_epoch:
                 candle_1m.aggregate_closed_candle(candle)
                 replayed_5s_total += 1
@@ -425,15 +503,22 @@ def main() -> None:
     print("SYMBOL COUNT:", len(SYMBOLS), flush=True)
     print("TIMEFRAMES: 5s, 1m", flush=True)
     print("STARTUP IST:", epoch_to_ist_text(startup_epoch), flush=True)
+    print("STREAM THREAD ALIVE:", stream.is_alive(), flush=True)
+    print("STREAM CONNECTED:", stream.is_connected(), flush=True)
 
     last_written_5s_by_symbol = {
         symbol: get_last_csv_bucket("candles_5s.csv", symbol)
         for symbol in SYMBOLS
     }
 
+    total_written_5s = 0
+    total_written_1m = 0
+    last_status_time = time.time()
+
     try:
         while True:
             candles_5s = candle_runner.pop_closed_candles("5s")
+            written_5s = 0
 
             for candle in candles_5s:
                 last_written = last_written_5s_by_symbol.get(candle.symbol)
@@ -441,8 +526,12 @@ def main() -> None:
                 if last_written is None or candle.bucket_epoch > last_written:
                     append_candle_to_csv("candles_5s.csv", candle)
                     last_written_5s_by_symbol[candle.symbol] = candle.bucket_epoch
+                    written_5s += 1
+
+            total_written_5s += written_5s
 
             candles_1m = candle_1m.pop_closed_candles()
+            written_1m = 0
 
             for candle in candles_1m:
                 print(
@@ -459,11 +548,33 @@ def main() -> None:
                 if last_written is None or candle.bucket_epoch > last_written:
                     append_candle_to_csv("candles_1m.csv", candle)
                     last_written_1m_by_symbol[candle.symbol] = candle.bucket_epoch
+                    written_1m += 1
+
+            total_written_1m += written_1m
+
+            now = time.time()
+            if now - last_status_time >= LIVE_STATUS_INTERVAL_SECONDS:
+                print(
+                    "LIVE STATUS:",
+                    f"stream_thread_alive={stream.is_alive()}",
+                    f"stream_connected={stream.is_connected()}",
+                    f"tick_queue={stream.tick_queue.qsize()}",
+                    f"raw_messages={stream.raw_message_count}",
+                    f"tick_messages={stream.tick_message_count}",
+                    f"latest_ticks={stream.latest_tick_count()}",
+                    f"written_5s={written_5s}",
+                    f"written_1m={written_1m}",
+                    f"total_5s={total_written_5s}",
+                    f"total_1m={total_written_1m}",
+                    flush=True,
+                )
+                last_status_time = now
 
             time.sleep(0.1)
 
     except KeyboardInterrupt:
         candle_runner.stop()
+        stream.stop()
         print("\nSTOPPING SYSTEM...", flush=True)
 
 

@@ -32,8 +32,17 @@ class FyersWebSocketManager:
     def get_all_latest_ticks(self) -> dict[str, MarketTick]:
         return dict(self._latest_ticks)
 
+    def get_latest_tick_count(self) -> int:
+        return len(self._latest_ticks)
+
     def clear_latest_ticks(self) -> None:
         self._latest_ticks.clear()
+
+    def is_data_connected(self) -> bool:
+        return (
+            self._data_socket is not None
+            and bool(self._data_socket.is_connected())
+        )
 
     # ---------------------------
     # Internal utility helpers
@@ -96,8 +105,8 @@ class FyersWebSocketManager:
                 data_type=data_type,
             )
 
-        self._data_socket.keep_running()
         self._run_callback(callback)
+        self._data_socket.keep_running()
 
     def _update_latest_tick(
         self,

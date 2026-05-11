@@ -84,6 +84,16 @@ class Broker:
         if not isinstance(response, dict):
             return pd.DataFrame(columns=self._history_columns())
 
+        if response.get("s") == "error":
+            print(
+                "FYERS HISTORY ERROR:",
+                f"symbol={symbol}",
+                f"code={response.get('code')}",
+                f"message={response.get('message')}",
+                flush=True,
+            )
+            return pd.DataFrame(columns=self._history_columns())
+
         candles = response.get("candles", [])
         if not isinstance(candles, list):
             return pd.DataFrame(columns=self._history_columns())
@@ -111,6 +121,16 @@ class Broker:
         response = self.get_client().history(data=payload)
 
         if not isinstance(response, dict):
+            return pd.DataFrame(columns=self._history_columns())
+
+        if response.get("s") == "error":
+            print(
+                "FYERS HISTORY ERROR:",
+                f"symbol={symbol}",
+                f"code={response.get('code')}",
+                f"message={response.get('message')}",
+                flush=True,
+            )
             return pd.DataFrame(columns=self._history_columns())
 
         candles = response.get("candles", [])
