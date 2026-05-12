@@ -36,6 +36,9 @@ REPAIR_1M_START_DELAY_SECONDS = float(
 REPAIR_1M_API_MIN_AGE_SECONDS = float(
     os.getenv("REPAIR_1M_API_MIN_AGE_SECONDS", "90")
 )
+STREAM_STALE_RESTART_SECONDS = float(
+    os.getenv("STREAM_STALE_RESTART_SECONDS", "25")
+)
 
 
 def epoch_to_ist_text(epoch: int) -> str:
@@ -995,6 +998,18 @@ def main() -> None:
                     }
 
             now = time.time()
+            stream_restarted = False
+
+            if stream.should_restart(stale_after_seconds=STREAM_STALE_RESTART_SECONDS):
+                stream_age = stream.message_age()
+                reason = (
+                    "stale_messages"
+                    if stream_age is not None
+                    and stream_age >= STREAM_STALE_RESTART_SECONDS
+                    else "disconnected"
+                )
+                stream_restarted = stream.restart(reason)
+
             minute_close_buckets = [
                 bucket_epoch
                 for bucket_epoch in written_5s_buckets
@@ -1093,6 +1108,8 @@ def main() -> None:
                     f"loop_fallback_1m={fallback_written_1m}",
                     f"immediate_1m={immediate_repaired_1m}",
                     f"immediate_5s={immediate_repaired_5s}",
+                    f"stream_restarts={stream.restart_count}",
+                    f"stream_restarted={stream_restarted}",
                     f"total_5s={total_written_5s}",
                     f"total_1m={total_written_1m}",
                     flush=True,

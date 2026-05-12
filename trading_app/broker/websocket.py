@@ -209,6 +209,7 @@ class FyersWebSocketManager:
         on_open: SocketOpenHandler | None = None,
         litemode: bool = False,
         data_type: str = "SymbolUpdate",
+        reconnect: bool = False,
     ):
         initial_symbols = self._normalize_symbols(symbols)
 
@@ -227,7 +228,7 @@ class FyersWebSocketManager:
             log_path="",
             litemode=litemode,
             write_to_file=False,
-            reconnect=True,
+            reconnect=reconnect,
             on_connect=_on_open,
             on_close=on_close or self._default_data_close,
             on_error=on_error or self._default_data_error,

@@ -14,6 +14,7 @@ from trading_app.broker.websocket import (
 DEFAULT_DATA_TYPE = "SymbolUpdate"
 DEFAULT_LITEMODE = False
 RAW_DEBUG_MESSAGE_LIMIT = 5
+MIN_RESTART_INTERVAL_SECONDS = 30
 
 
 class MarketStream:
@@ -30,11 +31,21 @@ class MarketStream:
         self.ws = FyersWebSocketManager()
         self.tick_queue: Queue[RawMessage] = Queue()
         self._thread: threading.Thread | None = None
+        self._lock = threading.RLock()
+        self._generation = 0
         self.raw_message_count = 0
         self.tick_message_count = 0
         self.last_message_time: float | None = None
+        self.last_restart_time = 0.0
+        self.restart_count = 0
 
-    def _on_data(self, message: RawMessage) -> None:
+    def _is_current_generation(self, generation: int) -> bool:
+        return generation == self._generation
+
+    def _on_data(self, message: RawMessage, generation: int) -> None:
+        if not self._is_current_generation(generation):
+            return
+
         raw_message = dict(message)
         self.raw_message_count += 1
         self.last_message_time = time.time()
@@ -47,54 +58,72 @@ class MarketStream:
 
         self.tick_queue.put(raw_message)
 
-    def _on_open(self) -> None:
+    def _on_open(self, generation: int) -> None:
+        if not self._is_current_generation(generation):
+            return
+
         print(
             "Market stream websocket connected:",
             f"symbols={len(self.symbols)}",
             flush=True,
         )
 
-    def _on_error(self, error: object) -> None:
+    def _on_error(self, error: object, generation: int) -> None:
+        if not self._is_current_generation(generation):
+            return
+
         print("Market stream websocket error:", error, flush=True)
 
-    def _on_close(self, message: object) -> None:
+    def _on_close(self, message: object, generation: int) -> None:
+        if not self._is_current_generation(generation):
+            return
+
         print("Market stream websocket closed:", message, flush=True)
 
-    def _connect_socket(self) -> None:
+    def _connect_socket(self, generation: int) -> None:
         self.ws.connect_data_socket(
             symbols=self.symbols,
-            on_message=self._on_data,
-            on_error=self._on_error,
-            on_close=self._on_close,
-            on_open=self._on_open,
+            on_message=lambda message: self._on_data(message, generation),
+            on_error=lambda error: self._on_error(error, generation),
+            on_close=lambda message: self._on_close(message, generation),
+            on_open=lambda: self._on_open(generation),
             litemode=DEFAULT_LITEMODE,
             data_type=DEFAULT_DATA_TYPE,
+            reconnect=False,
         )
 
     def start(self) -> None:
-        if self.is_alive():
-            return
+        with self._lock:
+            if self.is_alive():
+                return
 
-        self._thread = threading.Thread(
-            target=self._connect_socket,
-            name="MarketStreamSocket",
-            daemon=True,
-        )
+            self._generation += 1
+            generation = self._generation
 
-        self._thread.start()
+            self._thread = threading.Thread(
+                target=self._connect_socket,
+                args=(generation,),
+                name="MarketStreamSocket",
+                daemon=True,
+            )
+
+            self._thread.start()
 
     def stop(self) -> None:
-        try:
-            self.ws.disconnect_data_socket()
+        with self._lock:
+            self._generation += 1
 
-            if (
-                self._thread is not None
-                and self._thread is not threading.current_thread()
-            ):
-                self._thread.join(timeout=2)
+            try:
+                self.ws.disconnect_data_socket()
 
-        finally:
-            self._thread = None
+                if (
+                    self._thread is not None
+                    and self._thread is not threading.current_thread()
+                ):
+                    self._thread.join(timeout=2)
+
+            finally:
+                self._thread = None
 
     def is_alive(self) -> bool:
         return (
@@ -107,3 +136,48 @@ class MarketStream:
 
     def latest_tick_count(self) -> int:
         return self.ws.get_latest_tick_count()
+
+    def message_age(self) -> float | None:
+        if self.last_message_time is None:
+            return None
+
+        return time.time() - self.last_message_time
+
+    def should_restart(
+        self,
+        *,
+        stale_after_seconds: float,
+    ) -> bool:
+        now = time.time()
+
+        if now - self.last_restart_time < MIN_RESTART_INTERVAL_SECONDS:
+            return False
+
+        age = self.message_age()
+
+        if age is not None and age >= stale_after_seconds:
+            return True
+
+        return not self.is_connected() and age is not None
+
+    def restart(self, reason: str) -> bool:
+        now = time.time()
+
+        if now - self.last_restart_time < MIN_RESTART_INTERVAL_SECONDS:
+            return False
+
+        self.last_restart_time = now
+        self.restart_count += 1
+
+        print(
+            "Market stream watchdog restart:",
+            f"reason={reason}",
+            f"count={self.restart_count}",
+            flush=True,
+        )
+
+        self.stop()
+        self.ws = FyersWebSocketManager()
+        self.start()
+
+        return True
