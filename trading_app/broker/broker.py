@@ -1,5 +1,10 @@
 from __future__ import annotations
 
+from trading_app.logger import get_logger, log_debug, log_error, log_info, log_warning
+
+logger = get_logger(__name__)
+
+
 from datetime import date
 from datetime import datetime
 from datetime import time
@@ -85,7 +90,7 @@ class Broker:
             return pd.DataFrame(columns=self._history_columns())
 
         if response.get("s") == "error":
-            print(
+            log_warning(logger,
                 "FYERS HISTORY ERROR:",
                 f"symbol={symbol}",
                 f"code={response.get('code')}",
@@ -124,7 +129,7 @@ class Broker:
             return pd.DataFrame(columns=self._history_columns())
 
         if response.get("s") == "error":
-            print(
+            log_warning(logger,
                 "FYERS HISTORY ERROR:",
                 f"symbol={symbol}",
                 f"code={response.get('code')}",
@@ -517,11 +522,11 @@ if __name__ == "__main__":
                                                 resolution=resolution,
                                             )
 
-    print("SYMBOL:", symbol)
-    print("RESOLUTION:", resolution)
-    print("TOTAL CHUNKS:", len(chunks))
-    print("REQUEST FROM:", epoch_to_ist(range_from_epoch), range_from_epoch)
-    print("REQUEST TO  :", epoch_to_ist(range_to_epoch), range_to_epoch)
+    log_info(logger, "SYMBOL:", symbol)
+    log_info(logger, "RESOLUTION:", resolution)
+    log_info(logger, "TOTAL CHUNKS:", len(chunks))
+    log_info(logger, "REQUEST FROM:", epoch_to_ist(range_from_epoch), range_from_epoch)
+    log_info(logger, "REQUEST TO  :", epoch_to_ist(range_to_epoch), range_to_epoch)
 
     df = broker.get_history_chunked_epoch(
                                             symbol=symbol,
@@ -533,15 +538,15 @@ if __name__ == "__main__":
                                             request_delay=0.34,
                                         )
 
-    print("\n=== FINAL SUMMARY ===")
-    print("TOTAL MERGED CANDLES:", len(df))
+    log_info(logger, "\n=== FINAL SUMMARY ===")
+    log_info(logger, "TOTAL MERGED CANDLES:", len(df))
 
     if not df.empty:
         first = df.iloc[0]
         last = df.iloc[-1]
 
-        print("MERGED FIRST TIME IST:", epoch_to_ist(int(first["timestamp"])), int(first["timestamp"]))
-        print("MERGED LAST TIME IST :", epoch_to_ist(int(last["timestamp"])), int(last["timestamp"]))
+        log_info(logger, "MERGED FIRST TIME IST:", epoch_to_ist(int(first["timestamp"])), int(first["timestamp"]))
+        log_info(logger, "MERGED LAST TIME IST :", epoch_to_ist(int(last["timestamp"])), int(last["timestamp"]))
 
 
 # python -m trading_app.broker.broker

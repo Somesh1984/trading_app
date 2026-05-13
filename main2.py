@@ -1,5 +1,10 @@
 from __future__ import annotations
 
+from trading_app.logger import get_logger, log_debug, log_error, log_info, log_warning
+
+logger = get_logger(__name__)
+
+
 import os
 import time
 from datetime import datetime
@@ -302,7 +307,7 @@ def append_missing_1m_from_5s_csv(
     if rows:
         first_bucket = min(int(row["bucket_epoch"]) for row in rows)
         last_bucket = max(int(row["bucket_epoch"]) for row in rows)
-        print(
+        log_info(logger,
             f"{log_prefix}:",
             f"built_1m={len(rows)}",
             f"from={epoch_to_ist_text(first_bucket)}",
@@ -372,7 +377,7 @@ def sync_csv_from_history(
             range_from_epoch = min(existing_first_bucket, earliest_needed_bucket)
             range_from_epoch = max(0, range_from_epoch)
 
-    print(
+    log_info(logger,
         f"CSV SYNC START {resolution}: symbol={symbol} "
         f"from={epoch_to_ist_text(range_from_epoch)} "
         f"to={epoch_to_ist_text(range_to_epoch)}",
@@ -414,7 +419,7 @@ def sync_csv_from_history(
     if len(updated_df) > min_required_count:
         updated_df = updated_df.tail(min_required_count).reset_index(drop=True)
 
-    print(
+    log_info(logger,
         f"CSV SYNC {resolution}: symbol={symbol} "
         f"existing_last={last_csv_bucket} fetched={len(hist_df)} "
         f"final_count={len(updated_df)}",
@@ -424,7 +429,7 @@ def sync_csv_from_history(
     if not updated_df.empty:
         first_bucket = int(updated_df.iloc[0]["bucket_epoch"])
         last_bucket = int(updated_df.iloc[-1]["bucket_epoch"])
-        print(
+        log_info(logger,
             f"CSV SYNC {resolution} RANGE: {symbol} "
             f"{epoch_to_ist_text(first_bucket)} -> {epoch_to_ist_text(last_bucket)}",
             flush=True,
@@ -444,7 +449,7 @@ def catch_up_5s_history_to_common_bucket(
     target_bucket = (range_to_epoch // 5) * 5
     total_filled = 0
 
-    print(
+    log_info(logger,
         "STARTUP COMMON 5S CATCHUP:",
         f"target={epoch_to_ist_text(target_bucket)}",
         flush=True,
@@ -487,7 +492,7 @@ def catch_up_5s_history_to_common_bucket(
         csv_5s_by_symbol[symbol] = updated_df
 
         if new_rows:
-            print(
+            log_info(logger,
                 f"STARTUP COMMON 5S CATCHUP {index}/{len(symbols)}:",
                 f"symbol={symbol}",
                 f"filled={len(new_rows)}",
@@ -495,7 +500,7 @@ def catch_up_5s_history_to_common_bucket(
                 flush=True,
             )
 
-    print(
+    log_info(logger,
         "STARTUP COMMON 5S CATCHUP DONE:",
         f"filled={total_filled}",
         f"target={epoch_to_ist_text(target_bucket)}",
@@ -569,7 +574,7 @@ def backfill_gap_to_csv(
         append_rows_to_csv(csv_file, rows)
 
     if not gap_df.empty:
-        print(
+        log_debug(logger,
             f"API GAP CALLBACK {resolution}: symbol={symbol} filled={len(gap_df)} "
             f"from={epoch_to_ist_text(missing_from)} to={epoch_to_ist_text(missing_to)}",
             flush=True,
@@ -682,7 +687,7 @@ def repair_recent_1m_from_5s(
             existing_1m_keys.add(one_m_key)
             repaired_1m += 1
 
-            print(
+            log_info(logger,
                 "1M REPAIRED:",
                 f"symbol={symbol}",
                 f"open={epoch_to_ist_text(minute_bucket)}",
@@ -691,7 +696,7 @@ def repair_recent_1m_from_5s(
             )
 
     if repaired_1m or filled_5s or incomplete_1m:
-        print(
+        log_info(logger,
             "1M REPAIR STATUS:",
             f"filled_5s={filled_5s}",
             f"repaired_1m={repaired_1m}",
@@ -710,16 +715,16 @@ def main() -> None:
 
     csv_5s_by_symbol: dict[str, pd.DataFrame] = {}
 
-    print(
+    log_info(logger,
         f"STARTUP HISTORY SYNC: symbols={len(SYMBOLS)} "
         f"delay={STARTUP_HISTORY_REQUEST_DELAY}s",
         flush=True,
     )
-    print("MARKET STREAM STARTED EARLY", flush=True)
+    log_info(logger, "MARKET STREAM STARTED EARLY", flush=True)
 
     try:
         for index, symbol in enumerate(SYMBOLS, start=1):
-            print(
+            log_info(logger,
                 f"STARTUP HISTORY SYMBOL {index}/{len(SYMBOLS)}: {symbol}",
                 flush=True,
             )
@@ -737,8 +742,8 @@ def main() -> None:
                 time.sleep(STARTUP_HISTORY_REQUEST_DELAY)
     except FyersAuthError as exc:
         stream.stop()
-        print("FYERS AUTH ERROR:", exc, flush=True)
-        print(
+        log_error(logger, "FYERS AUTH ERROR:", exc, flush=True)
+        log_error(logger,
             "Startup stopped. Check internet/DNS access to api-t2.fyers.in "
             "and run again.",
             flush=True,
@@ -816,7 +821,7 @@ def main() -> None:
                     time.sleep(GAP_BACKFILL_RETRY_DELAY)
 
             if gap_df.empty:
-                print(
+                log_warning(logger,
                     "API GAP INCOMPLETE:",
                     f"symbol={symbol}",
                     f"from={epoch_to_ist_text(from_epoch)}",
@@ -830,7 +835,7 @@ def main() -> None:
             missing_buckets = sorted(expected_buckets - fetched_buckets)
 
             if missing_buckets:
-                print(
+                log_warning(logger,
                     "API GAP INCOMPLETE:",
                     f"symbol={symbol}",
                     f"missing={len(missing_buckets)}",
@@ -909,12 +914,12 @@ def main() -> None:
             for symbol in SYMBOLS
         }
 
-    print(f"SEEDED 5S FROM CSV: {seeded_5s_total}", flush=True)
-    print(f"REPLAYED 5S TO 1M: {replayed_5s_total}", flush=True)
-    print(f"SEEDED 1M FROM 5S REPLAY: {len(replayed_1m_candles)}", flush=True)
-    print(f"BUILT 1M FROM 5S CSV: {built_1m_from_5s_csv}", flush=True)
-    print(f"STARTUP CATCHUP 5S FILLED: {startup_catchup_5s}", flush=True)
-    print("QUEUED TICKS BEFORE RUNNER:", stream.tick_queue.qsize(), flush=True)
+    log_info(logger, f"SEEDED 5S FROM CSV: {seeded_5s_total}", flush=True)
+    log_info(logger, f"REPLAYED 5S TO 1M: {replayed_5s_total}", flush=True)
+    log_info(logger, f"SEEDED 1M FROM 5S REPLAY: {len(replayed_1m_candles)}", flush=True)
+    log_info(logger, f"BUILT 1M FROM 5S CSV: {built_1m_from_5s_csv}", flush=True)
+    log_info(logger, f"STARTUP CATCHUP 5S FILLED: {startup_catchup_5s}", flush=True)
+    log_info(logger, "QUEUED TICKS BEFORE RUNNER:", stream.tick_queue.qsize(), flush=True)
 
     candle_runner = CandleRunner(
         tick_queue=stream.tick_queue,
@@ -923,12 +928,12 @@ def main() -> None:
     )
     candle_runner.start()
 
-    print("STARTING MARKET STREAM", flush=True)
-    print("SYMBOL COUNT:", len(SYMBOLS), flush=True)
-    print("TIMEFRAMES: 5s, 1m", flush=True)
-    print("STARTUP IST:", epoch_to_ist_text(startup_epoch), flush=True)
-    print("STREAM THREAD ALIVE:", stream.is_alive(), flush=True)
-    print("STREAM CONNECTED:", stream.is_connected(), flush=True)
+    log_info(logger, "STARTING MARKET STREAM", flush=True)
+    log_info(logger, "SYMBOL COUNT:", len(SYMBOLS), flush=True)
+    log_info(logger, "TIMEFRAMES: 5s, 1m", flush=True)
+    log_info(logger, "STARTUP IST:", epoch_to_ist_text(startup_epoch), flush=True)
+    log_debug(logger, "STREAM THREAD ALIVE:", stream.is_alive(), flush=True)
+    log_info(logger, "STREAM CONNECTED:", stream.is_connected(), flush=True)
 
     last_written_5s_by_symbol = {
         symbol: get_last_csv_bucket("candles_5s.csv", symbol)
@@ -974,7 +979,7 @@ def main() -> None:
                     append_candle_to_csv("candles_1m.csv", candle)
                     last_written_1m_by_symbol[candle.symbol] = candle.bucket_epoch
                     written_1m += 1
-                    print(
+                    log_debug(logger,
                         "1M CLOSED:",
                         f"symbol={candle.symbol}",
                         f"open={epoch_to_ist_text(candle.bucket_epoch)}",
@@ -1104,7 +1109,7 @@ def main() -> None:
                     else round(now - stream.last_message_time, 2)
                 )
 
-                print(
+                log_info(logger,
                     "LIVE STATUS:",
                     f"stream_connected={stream.is_connected()}",
                     f"tick_queue={stream.tick_queue.qsize()}",
@@ -1136,7 +1141,7 @@ def main() -> None:
     except KeyboardInterrupt:
         candle_runner.stop()
         stream.stop()
-        print("\nSTOPPING SYSTEM...", flush=True)
+        log_info(logger, "\nSTOPPING SYSTEM...", flush=True)
 
 
 if __name__ == "__main__":

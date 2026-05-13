@@ -1,5 +1,10 @@
 from __future__ import annotations
 
+from trading_app.logger import get_logger, log_debug, log_error, log_info, log_warning
+
+logger = get_logger(__name__)
+
+
 import os
 import time
 from datetime import datetime
@@ -203,7 +208,7 @@ def sync_csv_from_history(
     if len(updated_df) > min_required_count:
         updated_df = updated_df.tail(min_required_count).reset_index(drop=True)
 
-    print(
+    log_info(logger,
         f"CSV SYNC {resolution}: existing_last={last_csv_bucket} fetched={len(hist_df)} final_count={len(updated_df)}",
         flush=True,
     )
@@ -211,7 +216,7 @@ def sync_csv_from_history(
     if not updated_df.empty:
         first_bucket = int(updated_df.iloc[0]["bucket_epoch"])
         last_bucket = int(updated_df.iloc[-1]["bucket_epoch"])
-        print(
+        log_info(logger,
             f"CSV SYNC {resolution} RANGE: {epoch_to_ist_text(first_bucket)} -> {epoch_to_ist_text(last_bucket)}",
             flush=True,
         )
@@ -277,7 +282,7 @@ def backfill_gap_to_csv(
 
         append_rows_to_csv(csv_file, rows)
 
-        print(
+        log_info(logger,
             f"BACKFILL {resolution}: filled={len(gap_df)} "
             f"from={epoch_to_ist_text(missing_from)} to={epoch_to_ist_text(missing_to)}",
             flush=True,
@@ -388,9 +393,9 @@ def main() -> None:
 
     seeded_1m = len(replayed_1m_candles)
 
-    print(f"SEEDED 5S FROM CSV: {seeded_5s}", flush=True)
-    print(f"REPLAYED 5S TO 1M: {len(replayed_5s_for_1m)}", flush=True)
-    print(f"SEEDED 1M FROM 5S REPLAY: {seeded_1m}", flush=True)
+    log_info(logger, f"SEEDED 5S FROM CSV: {seeded_5s}", flush=True)
+    log_info(logger, f"REPLAYED 5S TO 1M: {len(replayed_5s_for_1m)}", flush=True)
+    log_info(logger, f"SEEDED 1M FROM 5S REPLAY: {seeded_1m}", flush=True)
 
     stream = MarketStream(symbols=[SYMBOL])
     stream.start()
@@ -404,10 +409,10 @@ def main() -> None:
     )
     candle_runner.start()
 
-    print("STARTING MARKET STREAM", flush=True)
-    print("SYMBOL:", SYMBOL, flush=True)
-    print("TIMEFRAMES: 5s, 1m", flush=True)
-    print("STARTUP IST:", epoch_to_ist_text(startup_epoch), flush=True)
+    log_info(logger, "STARTING MARKET STREAM", flush=True)
+    log_info(logger, "SYMBOL:", SYMBOL, flush=True)
+    log_info(logger, "TIMEFRAMES: 5s, 1m", flush=True)
+    log_info(logger, "STARTUP IST:", epoch_to_ist_text(startup_epoch), flush=True)
 
     last_written_5s = get_last_csv_bucket("candles_5s.csv", SYMBOL)
     if last_written_1m is None:
@@ -425,7 +430,7 @@ def main() -> None:
 
             candles_1m = candle_1m.pop_closed_candles()
             for candle in candles_1m:
-                print(
+                log_info(logger,
                     "1M CLOSED:",
                     f"open={epoch_to_ist_text(candle.bucket_epoch)}",
                     f"close={epoch_to_ist_text(candle.bucket_epoch + candle.timeframe_seconds)}",
@@ -441,7 +446,7 @@ def main() -> None:
 
     except KeyboardInterrupt:
         candle_runner.stop()
-        print("\nSTOPPING SYSTEM...", flush=True)
+        log_info(logger, "\nSTOPPING SYSTEM...", flush=True)
 
 
 if __name__ == "__main__":

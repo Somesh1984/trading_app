@@ -1,5 +1,10 @@
 from __future__ import annotations
 
+from trading_app.logger import get_logger, log_debug, log_error, log_info, log_warning
+
+logger = get_logger(__name__)
+
+
 from collections import deque
 from datetime import datetime
 from queue import Queue
@@ -97,7 +102,7 @@ class CandleManager:
 
         if last_closed_bucket is not None and bucket_epoch <= last_closed_bucket:
             if self.debug:
-                print(
+                log_debug(logger,
                     "SKIP CLOSED BUCKET TICK:",
                     tick.symbol,
                     bucket_epoch,
@@ -120,7 +125,7 @@ class CandleManager:
 
         if bucket_epoch < current.bucket_epoch:
             if self.debug:
-                print(
+                log_debug(logger,
                     "SKIP OLD BUCKET TICK:",
                     tick.symbol,
                     tick.exch_feed_time,
@@ -347,7 +352,7 @@ class CandleManager:
                         self.timeframe_seconds,
                     )
                     if not gap_filled and self.debug:
-                        print(
+                        log_debug(logger,
                             "CONTINUE AFTER GAP MISS:",
                             candle.symbol,
                             expected_bucket,
@@ -510,21 +515,21 @@ class CandleManager:
         last_closed = self._last_closed_bucket_by_symbol.get(symbol)
         if last_closed is not None and candle.bucket_epoch <= last_closed:
             if self.debug:
-                print("SKIP DUPLICATE CLOSE:", symbol, candle.bucket_epoch, flush=True)
+                log_debug(logger, "SKIP DUPLICATE CLOSE:", symbol, candle.bucket_epoch, flush=True)
             return
 
         if self._is_partial_bucket(symbol, candle.bucket_epoch):
             self._last_closed_bucket_by_symbol[symbol] = candle.bucket_epoch
 
             if self.debug:
-                print("SKIP PARTIAL CLOSE:", symbol, candle.bucket_epoch, flush=True)
+                log_debug(logger, "SKIP PARTIAL CLOSE:", symbol, candle.bucket_epoch, flush=True)
             return
 
         candle.is_complete = True
         self._last_closed_bucket_by_symbol[symbol] = candle.bucket_epoch
 
         if self.debug:
-            print(
+            log_debug(logger,
                 "CANDLE CLOSE DEBUG:",
                 symbol,
                 "bucket:",

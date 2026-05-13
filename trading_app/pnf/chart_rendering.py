@@ -8,6 +8,11 @@ state.
 
 from __future__ import annotations
 
+from trading_app.logger import get_logger, log_debug, log_error, log_info, log_warning
+
+logger = get_logger(__name__)
+
+
 from typing import Any
 from warnings import warn
 
@@ -116,10 +121,10 @@ class ChartRenderingMixin:
 
         table = tabulate(table, tablefmt='simple')
 
-        print(self.title)
-        print(table)
+        log_info(logger, self.title)
+        log_info(logger, table)
 
         if self.trendlines is not None:
-            print(f'last trendline: {last_trendline} line of length {last_trendline_length}')
+            log_info(logger, f'last trendline: {last_trendline} line of length {last_trendline_length}')
         return f'printed {columns}/{total_columns} columns.'
 

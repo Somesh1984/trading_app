@@ -1,5 +1,10 @@
 from __future__ import annotations
 
+from trading_app.logger import get_logger, log_debug, log_error, log_info, log_warning
+
+logger = get_logger(__name__)
+
+
 import csv
 import json
 from dataclasses import asdict
@@ -551,7 +556,7 @@ class FyersSymbolService:
         strikes = self._unique_sorted_strikes(options)
         return self._nearest_strike(strikes, spot_price)
 
-    def get_atm_option_pair(self, underlying: str, spot_price: float, *, expiry_epoch: int | None = None, 
+    def get_atm_option_pair(self, underlying: str, spot_price: float, *, expiry_epoch: int | None = None,
                             use_cache_only: bool = True) -> tuple[FyersOptionSymbol | None, FyersOptionSymbol | None]:
         if expiry_epoch is None:
             expiry_epoch = self.get_current_weekly_expiry(underlying, use_cache_only=use_cache_only)
@@ -637,90 +642,90 @@ if __name__ == "__main__":
     service = FyersSymbolService()
 
     try:
-        print(f"Cache file: {service.cache_path}")
+        log_info(logger, f"Cache file: {service.cache_path}")
         all_symbols = service.ensure_daily_cache(exchanges=["NSE_CM", "BSE_CM", "NSE_FO", "BSE_FO"], force_refresh=False)
-        print(f"Total cached symbols: {len(all_symbols)}")
+        log_info(logger, f"Total cached symbols: {len(all_symbols)}")
 
-        print("\nSearch: SENSEX spot")
+        log_info(logger, "\nSearch: SENSEX spot")
         sensex_spot = service.get_index_spot("SENSEX", use_cache_only=True)
         if sensex_spot is None:
-            print("No SENSEX spot found")
+            log_info(logger, "No SENSEX spot found")
         else:
-            print(f"{sensex_spot.kind} | {sensex_spot.symbol} | {sensex_spot.display_name} | {sensex_spot.exchange_code} | {sensex_spot.segment_code} | {sensex_spot.token}")
+            log_info(logger, f"{sensex_spot.kind} | {sensex_spot.symbol} | {sensex_spot.display_name} | {sensex_spot.exchange_code} | {sensex_spot.segment_code} | {sensex_spot.token}")
 
-        print("\nCurrent weekly expiry: SENSEX")
-        print(service.get_current_weekly_expiry_date("SENSEX", use_cache_only=True))
+        log_info(logger, "\nCurrent weekly expiry: SENSEX")
+        log_info(logger, service.get_current_weekly_expiry_date("SENSEX", use_cache_only=True))
 
-        print("\nNext weekly expiry: SENSEX")
-        print(service.get_next_weekly_expiry_date("SENSEX", use_cache_only=True))
+        log_info(logger, "\nNext weekly expiry: SENSEX")
+        log_info(logger, service.get_next_weekly_expiry_date("SENSEX", use_cache_only=True))
 
-        print("\nCurrent monthly option expiry: SENSEX")
-        print(service.get_current_monthly_expiry_date("SENSEX", instrument_kind="option", use_cache_only=True))
+        log_info(logger, "\nCurrent monthly option expiry: SENSEX")
+        log_info(logger, service.get_current_monthly_expiry_date("SENSEX", instrument_kind="option", use_cache_only=True))
 
-        print("\nCurrent monthly future expiry: SENSEX")
-        print(service.get_current_monthly_expiry_date("SENSEX", instrument_kind="future", use_cache_only=True))
+        log_info(logger, "\nCurrent monthly future expiry: SENSEX")
+        log_info(logger, service.get_current_monthly_expiry_date("SENSEX", instrument_kind="future", use_cache_only=True))
 
-        print("\nCurrent weekly CE count: SENSEX")
+        log_info(logger, "\nCurrent weekly CE count: SENSEX")
         current_weekly_ce = service.get_current_weekly_ce_options("SENSEX", use_cache_only=True)
-        print(len(current_weekly_ce))
+        log_info(logger, len(current_weekly_ce))
         for item in current_weekly_ce[:5]:
-            print(f"CE | {item.symbol} | {item.display_name} | expiry={service.format_expiry(item.expiry_epoch)} | strike={item.strike}")
+            log_info(logger, f"CE | {item.symbol} | {item.display_name} | expiry={service.format_expiry(item.expiry_epoch)} | strike={item.strike}")
 
-        print("\nCurrent weekly PE count: SENSEX")
+        log_info(logger, "\nCurrent weekly PE count: SENSEX")
         current_weekly_pe = service.get_current_weekly_pe_options("SENSEX", use_cache_only=True)
-        print(len(current_weekly_pe))
+        log_info(logger, len(current_weekly_pe))
         for item in current_weekly_pe[:5]:
-            print(f"PE | {item.symbol} | {item.display_name} | expiry={service.format_expiry(item.expiry_epoch)} | strike={item.strike}")
+            log_info(logger, f"PE | {item.symbol} | {item.display_name} | expiry={service.format_expiry(item.expiry_epoch)} | strike={item.strike}")
 
-        print("\nCurrent monthly CE count: SENSEX")
+        log_info(logger, "\nCurrent monthly CE count: SENSEX")
         current_monthly_ce = service.get_current_monthly_ce_options("SENSEX", use_cache_only=True)
-        print(len(current_monthly_ce))
+        log_info(logger, len(current_monthly_ce))
         for item in current_monthly_ce[:5]:
-            print(f"CE | {item.symbol} | {item.display_name} | expiry={service.format_expiry(item.expiry_epoch)} | strike={item.strike}")
+            log_info(logger, f"CE | {item.symbol} | {item.display_name} | expiry={service.format_expiry(item.expiry_epoch)} | strike={item.strike}")
 
-        print("\nCurrent monthly PE count: SENSEX")
+        log_info(logger, "\nCurrent monthly PE count: SENSEX")
         current_monthly_pe = service.get_current_monthly_pe_options("SENSEX", use_cache_only=True)
-        print(len(current_monthly_pe))
+        log_info(logger, len(current_monthly_pe))
         for item in current_monthly_pe[:5]:
-            print(f"PE | {item.symbol} | {item.display_name} | expiry={service.format_expiry(item.expiry_epoch)} | strike={item.strike}")
+            log_info(logger, f"PE | {item.symbol} | {item.display_name} | expiry={service.format_expiry(item.expiry_epoch)} | strike={item.strike}")
 
-        print("\nCurrent monthly futures: SENSEX")
+        log_info(logger, "\nCurrent monthly futures: SENSEX")
         current_monthly_futures = service.get_current_monthly_futures("SENSEX", use_cache_only=True)
         for item in current_monthly_futures:
-            print(f"{item.kind} | {item.symbol} | {item.display_name} | expiry={service.format_expiry(item.expiry_epoch)}")
+            log_info(logger, f"{item.kind} | {item.symbol} | {item.display_name} | expiry={service.format_expiry(item.expiry_epoch)}")
 
         sensex_spot_price = 65050.0
 
-        print("\nATM strike: SENSEX")
+        log_info(logger, "\nATM strike: SENSEX")
         atm_strike = service.get_atm_strike("SENSEX", sensex_spot_price, use_cache_only=True)
-        print(atm_strike)
+        log_info(logger, atm_strike)
 
-        print("\nATM CE / PE: SENSEX")
+        log_info(logger, "\nATM CE / PE: SENSEX")
         atm_ce, atm_pe = service.get_atm_option_pair("SENSEX", sensex_spot_price, use_cache_only=True)
         if atm_ce:
-            print(f"ATM CE | {atm_ce.symbol} | {atm_ce.display_name} | expiry={service.format_expiry(atm_ce.expiry_epoch)} | strike={atm_ce.strike}")
+            log_info(logger, f"ATM CE | {atm_ce.symbol} | {atm_ce.display_name} | expiry={service.format_expiry(atm_ce.expiry_epoch)} | strike={atm_ce.strike}")
         if atm_pe:
-            print(f"ATM PE | {atm_pe.symbol} | {atm_pe.display_name} | expiry={service.format_expiry(atm_pe.expiry_epoch)} | strike={atm_pe.strike}")
+            log_info(logger, f"ATM PE | {atm_pe.symbol} | {atm_pe.display_name} | expiry={service.format_expiry(atm_pe.expiry_epoch)} | strike={atm_pe.strike}")
 
-        print("\nOTM CE: SENSEX")
+        log_info(logger, "\nOTM CE: SENSEX")
         for item in service.get_otm_ce_options("SENSEX", sensex_spot_price, count=5, use_cache_only=True):
-            print(f"OTM CE | {item.symbol} | {item.display_name} | expiry={service.format_expiry(item.expiry_epoch)} | strike={item.strike}")
+            log_info(logger, f"OTM CE | {item.symbol} | {item.display_name} | expiry={service.format_expiry(item.expiry_epoch)} | strike={item.strike}")
 
-        print("\nOTM PE: SENSEX")
+        log_info(logger, "\nOTM PE: SENSEX")
         for item in service.get_otm_pe_options("SENSEX", sensex_spot_price, count=5, use_cache_only=True):
-            print(f"OTM PE | {item.symbol} | {item.display_name} | expiry={service.format_expiry(item.expiry_epoch)} | strike={item.strike}")
+            log_info(logger, f"OTM PE | {item.symbol} | {item.display_name} | expiry={service.format_expiry(item.expiry_epoch)} | strike={item.strike}")
 
-        print("\nITM CE: SENSEX")
+        log_info(logger, "\nITM CE: SENSEX")
         for item in service.get_itm_ce_options("SENSEX", sensex_spot_price, count=5, use_cache_only=True):
-            print(f"ITM CE | {item.symbol} | {item.display_name} | expiry={service.format_expiry(item.expiry_epoch)} | strike={item.strike}")
+            log_info(logger, f"ITM CE | {item.symbol} | {item.display_name} | expiry={service.format_expiry(item.expiry_epoch)} | strike={item.strike}")
 
-        print("\nITM PE: SENSEX")
+        log_info(logger, "\nITM PE: SENSEX")
         for item in service.get_itm_pe_options("SENSEX", sensex_spot_price, count=5, use_cache_only=True):
-            print(f"ITM PE | {item.symbol} | {item.display_name} | expiry={service.format_expiry(item.expiry_epoch)} | strike={item.strike}")
+            log_info(logger, f"ITM PE | {item.symbol} | {item.display_name} | expiry={service.format_expiry(item.expiry_epoch)} | strike={item.strike}")
 
     except requests.RequestException as exc:
-        print(f"Network/API error: {exc}")
+        log_info(logger, f"Network/API error: {exc}")
     except Exception as exc:
-        print(f"Unexpected error: {exc}")
+        log_info(logger, f"Unexpected error: {exc}")
 
 # python -m trading_app.broker.symbols

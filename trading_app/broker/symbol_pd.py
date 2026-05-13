@@ -1,6 +1,11 @@
 
 from __future__ import annotations
 
+from trading_app.logger import get_logger, log_debug, log_error, log_info, log_warning
+
+logger = get_logger(__name__)
+
+
 from io import StringIO
 
 import pandas as pd
@@ -15,7 +20,7 @@ class FyersSymbolService:
                                             "NSE_FO": "https://public.fyers.in/sym_details/NSE_FO.csv",
                                             "BSE_FO": "https://public.fyers.in/sym_details/BSE_FO.csv",
                                                                                                         }
-    
+
     INDEX_CONFIG: dict[str, dict[str, str | int]] = {
                                                         "NIFTY": {
                                                                     "spot_symbol": "NSE:NIFTY50-INDEX",
@@ -55,10 +60,10 @@ class FyersSymbolService:
                       "Reserved Column 3","Source File", ]
 
         return df
-    
+
     def get_spot_index_symbols(self) -> list[str]:
         return ["NSE:NIFTY50-INDEX","BSE:SENSEX-INDEX",]
-    
+
 
     def _parse_expiry_epoch(self,expiry_series: pd.Series,) -> pd.Series:
         numeric_expiry = pd.to_numeric(expiry_series, errors="coerce")
@@ -89,7 +94,7 @@ class FyersSymbolService:
         upper_strike = max(upper_strike, current_strike)
 
         return list(range(lower_strike, upper_strike + strike_step, strike_step))
-    
+
     def get_option_symbols_for_strikes(self,df: pd.DataFrame,*,underlying: str,strikes: list[int],expiry_epoch: int | None = None,) -> list[str]:
             if df.empty or not strikes:
                 return []
@@ -314,7 +319,7 @@ class FyersSymbolService:
 #                                                 base_count=5,
 #                                                 )
 
-#     print(result)
+#     log_info(logger, result)
 
 
 if __name__ == "__main__":
@@ -333,8 +338,8 @@ if __name__ == "__main__":
                                                     base_count=5,
                                                     )
 
-    print("\n=== INITIAL RESULT ===")
-    print(initial_result)
+    log_info(logger, "\n=== INITIAL RESULT ===")
+    log_info(logger, initial_result)
 
     subscribed_strikes = set(initial_result["all_strikes"])
 
@@ -346,8 +351,8 @@ if __name__ == "__main__":
                                                         base_count=5,
                                                         )
 
-    print("\n=== NO EXPAND RESULT ===")
-    print(no_expand_result)
+    log_info(logger, "\n=== NO EXPAND RESULT ===")
+    log_info(logger, no_expand_result)
 
     expand_result = service.expand_subscription_range(
                                                     index_name="NIFTY",
@@ -357,8 +362,8 @@ if __name__ == "__main__":
                                                     base_count=5,
                                                     )
 
-    print("\n=== EXPAND RESULT ===")
-    print(expand_result)
+    log_info(logger, "\n=== EXPAND RESULT ===")
+    log_info(logger, expand_result)
 
 
 

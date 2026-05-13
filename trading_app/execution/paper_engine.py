@@ -2,6 +2,11 @@
 
 from __future__ import annotations
 
+from trading_app.logger import get_logger, log_debug, log_error, log_info, log_warning
+
+logger = get_logger(__name__)
+
+
 from datetime import datetime
 from typing import Dict, List
 
@@ -41,14 +46,14 @@ class PaperExecutionEngine:
         return f"{self._fmt_epoch(start)} → {self._fmt_epoch(end)}"
 
     def print_open_positions(self) -> None:
-        print("OPEN POSITIONS:")
+        log_info(logger, "OPEN POSITIONS:")
         if not self.positions:
-            print("NONE")
+            log_info(logger, "NONE")
             return
 
         for symbol, position in self.positions.items():
             live_pnl = self._r(self.live_mtm.get(symbol, 0.0))
-            print(
+            log_info(logger,
                 symbol,
                 position.side,
                 position.qty,
@@ -58,11 +63,11 @@ class PaperExecutionEngine:
             )
 
     def print_summary(self) -> None:
-        print("SUMMARY:")
-        print("REALIZED PNL:", self._r(self.get_realized_pnl()))
-        print("UNREALIZED PNL:", self._r(self.get_unrealized_pnl()))
-        print("TOTAL PNL:", self._r(self.get_total_pnl()))
-        print("CLOSED TRADES:", len(self.closed_trades))
+        log_info(logger, "SUMMARY:")
+        log_info(logger, "REALIZED PNL:", self._r(self.get_realized_pnl()))
+        log_info(logger, "UNREALIZED PNL:", self._r(self.get_unrealized_pnl()))
+        log_info(logger, "TOTAL PNL:", self._r(self.get_total_pnl()))
+        log_info(logger, "CLOSED TRADES:", len(self.closed_trades))
 
     def update_mtm(self, symbol: str, ltp: float) -> None:
         position = self.positions.get(symbol)
@@ -76,17 +81,17 @@ class PaperExecutionEngine:
             pnl = (position.entry_price - ltp) * position.qty
 
         self.live_mtm[symbol] = pnl
-        print("LIVE MTM:", symbol, self._r(pnl))
-        print("TOTAL PORTFOLIO PNL:", self._r(self.get_total_pnl()))
+        log_info(logger, "LIVE MTM:", symbol, self._r(pnl))
+        log_info(logger, "TOTAL PORTFOLIO PNL:", self._r(self.get_total_pnl()))
 
     def process_candle(self, candle: LiveCandle, signal: str) -> None:
-        print(
+        log_info(logger,
             "CANDLE:",
             candle.symbol,
             self._fmt_range(candle.bucket_epoch, candle.timeframe_seconds),
             candle,
         )
-        print("SIGNAL:", candle.symbol, signal)
+        log_info(logger, "SIGNAL:", candle.symbol, signal)
 
         if signal == "NONE":
             return
@@ -95,7 +100,7 @@ class PaperExecutionEngine:
 
         if existing is not None:
             if existing.side == signal:
-                print("POSITION EXISTS:", existing)
+                log_info(logger, "POSITION EXISTS:", existing)
                 self.print_open_positions()
                 self.print_summary()
                 return
@@ -117,9 +122,9 @@ class PaperExecutionEngine:
             del self.positions[candle.symbol]
             self.live_mtm.pop(candle.symbol, None)
 
-            print("TRADE CLOSED:", closed)
-            print("TOTAL CLOSED:", len(self.closed_trades))
-            print("TOTAL PNL:", self._r(self.get_total_pnl()))
+            log_info(logger, "TRADE CLOSED:", closed)
+            log_info(logger, "TOTAL CLOSED:", len(self.closed_trades))
+            log_info(logger, "TOTAL PNL:", self._r(self.get_total_pnl()))
 
         new_trade = PaperTrade(
             symbol=candle.symbol,
@@ -142,7 +147,7 @@ class PaperExecutionEngine:
         self.positions[candle.symbol] = new_trade
         self.live_mtm[candle.symbol] = 0.0
 
-        print("TRADE OPENED:", new_trade)
+        log_info(logger, "TRADE OPENED:", new_trade)
         self.print_open_positions()
         self.print_summary()
 
@@ -188,8 +193,8 @@ class PaperExecutionEngine:
         del self.positions[symbol]
         self.live_mtm.pop(symbol, None)
 
-        print("SL/TP TRADE CLOSED:", closed)
-        print("TOTAL CLOSED:", len(self.closed_trades))
-        print("TOTAL PNL:", self._r(self.get_total_pnl()))
+        log_info(logger, "SL/TP TRADE CLOSED:", closed)
+        log_info(logger, "TOTAL CLOSED:", len(self.closed_trades))
+        log_info(logger, "TOTAL PNL:", self._r(self.get_total_pnl()))
         self.print_open_positions()
         self.print_summary()

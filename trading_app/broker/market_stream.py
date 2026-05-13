@@ -1,6 +1,11 @@
 
 from __future__ import annotations
 
+from trading_app.logger import get_logger, log_debug, log_error, log_info, log_warning
+
+logger = get_logger(__name__)
+
+
 import threading
 import time
 from queue import Queue
@@ -53,7 +58,7 @@ class MarketStream:
         self.last_message_time = time.time()
 
         if self.raw_message_count <= RAW_DEBUG_MESSAGE_LIMIT:
-            print("Market stream raw message:", raw_message, flush=True)
+            log_debug(logger, "Market stream raw message:", raw_message, flush=True)
 
         if raw_message.get("symbol") and raw_message.get("ltp"):
             self.tick_message_count += 1
@@ -64,7 +69,7 @@ class MarketStream:
         if not self._is_current_generation(generation):
             return
 
-        print(
+        log_info(logger,
             "Market stream websocket connected:",
             f"symbols={len(self.symbols)}",
             flush=True,
@@ -74,13 +79,13 @@ class MarketStream:
         if not self._is_current_generation(generation):
             return
 
-        print("Market stream websocket error:", error, flush=True)
+        log_error(logger, "Market stream websocket error:", error, flush=True)
 
     def _on_close(self, message: object, generation: int) -> None:
         if not self._is_current_generation(generation):
             return
 
-        print("Market stream websocket closed:", message, flush=True)
+        log_warning(logger, "Market stream websocket closed:", message, flush=True)
 
     def _connect_socket(self, generation: int) -> None:
         try:
@@ -97,11 +102,11 @@ class MarketStream:
         except FyersAuthError as exc:
             if self._is_current_generation(generation):
                 self.last_error = str(exc)
-                print("Market stream auth failed:", exc, flush=True)
+                log_error(logger, "Market stream auth failed:", exc, flush=True)
         except Exception as exc:
             if self._is_current_generation(generation):
                 self.last_error = f"{type(exc).__name__}: {exc}"
-                print("Market stream failed:", self.last_error, flush=True)
+                log_error(logger, "Market stream failed:", self.last_error, flush=True)
 
     def start(self) -> None:
         with self._lock:
@@ -180,7 +185,7 @@ class MarketStream:
         self.last_restart_time = now
         self.restart_count += 1
 
-        print(
+        log_warning(logger,
             "Market stream watchdog restart:",
             f"reason={reason}",
             f"count={self.restart_count}",

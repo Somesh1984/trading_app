@@ -1,6 +1,11 @@
 
 from __future__ import annotations
 
+from trading_app.logger import get_logger, log_debug, log_error, log_info, log_warning
+
+logger = get_logger(__name__)
+
+
 from typing import Callable, Iterable,TypeAlias
 
 from fyers_apiv3.FyersWebsocket import data_ws, order_ws
@@ -68,19 +73,19 @@ class FyersWebSocketManager:
     # Default socket handlers
     # ---------------------------
     def _default_data_close(self, message: object) -> None:
-        print("DATA CLOSE:", message, flush=True)
+        log_warning(logger, "DATA CLOSE:", message, flush=True)
 
     def _default_data_error(self, message: object) -> None:
-        print("DATA ERROR:", message, flush=True)
+        log_error(logger, "DATA ERROR:", message, flush=True)
 
     def _default_order_open(self) -> None:
-        print("ORDER SOCKET CONNECTED", flush=True)
+        log_info(logger, "ORDER SOCKET CONNECTED", flush=True)
 
     def _default_order_close(self, message: object) -> None:
-        print("ORDER CLOSE:", message, flush=True)
+        log_warning(logger, "ORDER CLOSE:", message, flush=True)
 
     def _default_order_error(self, message: object) -> None:
-        print("ORDER ERROR:", message, flush=True)
+        log_error(logger, "ORDER ERROR:", message, flush=True)
 
     # ---------------------------
     # Data socket internal handlers
@@ -137,7 +142,7 @@ class FyersWebSocketManager:
         elif general_handler is not None:
             self._run_callback(general_handler, message)
         else:
-            print(f"{default_label}:", message, flush=True)
+            log_info(logger, f"{default_label}:", message, flush=True)
 
     # ---------------------------
     # Auth / token helpers

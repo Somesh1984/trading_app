@@ -1,3 +1,7 @@
+from trading_app.logger import get_logger, log_debug, log_error, log_info, log_warning
+
+logger = get_logger(__name__)
+
 import asyncio
 
 from trading_app.notifications.telegram import TelegramNotifier
@@ -12,7 +16,7 @@ async def main() -> None:
         "Market Closed"
     )
 
-    print("SENT:", result)
+    log_info(logger, "SENT:", result)
 
 
 if __name__ == "__main__":

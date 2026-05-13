@@ -1,5 +1,10 @@
 from __future__ import annotations
 
+from trading_app.logger import get_logger, log_debug, log_error, log_info, log_warning
+
+logger = get_logger(__name__)
+
+
 from io import StringIO
 
 import pandas as pd
@@ -177,7 +182,7 @@ class NSEUniverseLoader:
             return pd.DataFrame(rows, columns=["sector", "symbol"])
         except Exception:
             return pd.DataFrame(columns=["sector", "symbol"])
-        
+
 
 
 loader = NSEUniverseLoader()
@@ -186,4 +191,4 @@ nifty200 = loader.load_index_constituents("NIFTY50")
 bank_symbols = loader.load_sector_constituents("NIFTY_BANK")
 all_sectors = loader.load_all_sectors()
 sector_df = loader.load_all_sectors_df()
-print(nifty200)
+log_info(logger, nifty200)
