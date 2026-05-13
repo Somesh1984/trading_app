@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import base64
+import time
 from threading import Lock
 from urllib.parse import parse_qs, urlparse
 
@@ -21,10 +22,34 @@ from ..settings import (
 
 _AUTH_LOCK = Lock()
 _CACHED_ACCESS_TOKEN: str | None = None
+_LAST_AUTH_FAILURE: tuple[float, "FyersAuthError"] | None = None
+AUTH_FAILURE_COOLDOWN_SECONDS = 1
+
+
+class FyersAuthError(RuntimeError):
+    """Raised when FYERS authentication cannot complete."""
 
 
 def _b64(value: str) -> str:
     return base64.b64encode(value.encode("ascii")).decode("ascii")
+
+
+def _request_auth_post(
+    url: str,
+    *,
+    session: requests.Session | None = None,
+    **kwargs,
+) -> requests.Response:
+    client = session or requests
+
+    try:
+        response = client.post(url, timeout=30, **kwargs)
+        response.raise_for_status()
+        return response
+    except requests.exceptions.RequestException as exc:
+        raise FyersAuthError(
+            f"FYERS auth request failed for {url}: {exc}"
+        ) from exc
 
 
 def _generate_new_access_token() -> str:
@@ -33,43 +58,39 @@ def _generate_new_access_token() -> str:
     verify_pin_url = "https://api-t2.fyers.in/vagator/v2/verify_pin_v2"
     token_url = "https://api-t1.fyers.in/api/v3/token"
 
-    otp_resp = requests.post(
+    otp_resp = _request_auth_post(
         send_otp_url,
         json={"fy_id": _b64(FYERS_USER_ID), "app_id": "2"},
-        timeout=30,
     )
-    otp_resp.raise_for_status()
     otp_data = otp_resp.json()
     request_key = otp_data["request_key"]
 
     otp_code = pyotp.TOTP(FYERS_TOTP_KEY).now()
-    otp_verify_resp = requests.post(
+    otp_verify_resp = _request_auth_post(
         verify_otp_url,
         json={"request_key": request_key, "otp": otp_code},
-        timeout=30,
     )
-    otp_verify_resp.raise_for_status()
     otp_verify_data = otp_verify_resp.json()
     pin_request_key = otp_verify_data["request_key"]
 
     session = requests.Session()
-    pin_resp = session.post(
+    pin_resp = _request_auth_post(
         verify_pin_url,
+        session=session,
         json={
             "request_key": pin_request_key,
             "identity_type": "pin",
             "identifier": _b64(FYERS_PIN),
         },
-        timeout=30,
     )
-    pin_resp.raise_for_status()
     pin_data = pin_resp.json()
 
     bearer_token = pin_data["data"]["access_token"]
     session.headers.update({"authorization": f"Bearer {bearer_token}"})
 
-    token_resp = session.post(
+    token_resp = _request_auth_post(
         token_url,
+        session=session,
         json={
             "fyers_id": FYERS_USER_ID,
             "app_id": FYERS_CLIENT_ID[:-4],
@@ -82,9 +103,7 @@ def _generate_new_access_token() -> str:
             "response_type": "code",
             "create_cookie": True,
         },
-        timeout=30,
     )
-    token_resp.raise_for_status()
     token_data = token_resp.json()
 
     auth_code_url = token_data["Url"]
@@ -104,11 +123,22 @@ def _generate_new_access_token() -> str:
 
 
 def generate_access_token(*, force_refresh: bool = False) -> str:
-    global _CACHED_ACCESS_TOKEN
+    global _CACHED_ACCESS_TOKEN, _LAST_AUTH_FAILURE
 
     with _AUTH_LOCK:
         if _CACHED_ACCESS_TOKEN is None or force_refresh:
-            _CACHED_ACCESS_TOKEN = _generate_new_access_token()
+            if _LAST_AUTH_FAILURE is not None:
+                failed_at, failure = _LAST_AUTH_FAILURE
+                if time.monotonic() - failed_at < AUTH_FAILURE_COOLDOWN_SECONDS:
+                    raise failure
+
+            try:
+                _CACHED_ACCESS_TOKEN = _generate_new_access_token()
+                _LAST_AUTH_FAILURE = None
+            except FyersAuthError as exc:
+                _LAST_AUTH_FAILURE = (time.monotonic(), exc)
+                raise
+
         return _CACHED_ACCESS_TOKEN
 
 

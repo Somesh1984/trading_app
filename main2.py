@@ -7,6 +7,7 @@ from zoneinfo import ZoneInfo
 
 import pandas as pd
 
+from trading_app.broker.auth import FyersAuthError
 from trading_app.broker.broker import Broker
 from trading_app.broker.candle_manager import CandleManager
 from trading_app.broker.candle_runner import CandleRunner
@@ -716,23 +717,33 @@ def main() -> None:
     )
     print("MARKET STREAM STARTED EARLY", flush=True)
 
-    for index, symbol in enumerate(SYMBOLS, start=1):
+    try:
+        for index, symbol in enumerate(SYMBOLS, start=1):
+            print(
+                f"STARTUP HISTORY SYMBOL {index}/{len(SYMBOLS)}: {symbol}",
+                flush=True,
+            )
+            csv_5s_by_symbol[symbol] = sync_csv_from_history(
+                broker=broker,
+                symbol=symbol,
+                resolution="5S",
+                timeframe_seconds=5,
+                csv_file="candles_5s.csv",
+                default_lookback_seconds=15 * 60,
+                min_required_count=MIN_5S_CANDLES,
+            )
+
+            if index < len(SYMBOLS) and STARTUP_HISTORY_REQUEST_DELAY > 0:
+                time.sleep(STARTUP_HISTORY_REQUEST_DELAY)
+    except FyersAuthError as exc:
+        stream.stop()
+        print("FYERS AUTH ERROR:", exc, flush=True)
         print(
-            f"STARTUP HISTORY SYMBOL {index}/{len(SYMBOLS)}: {symbol}",
+            "Startup stopped. Check internet/DNS access to api-t2.fyers.in "
+            "and run again.",
             flush=True,
         )
-        csv_5s_by_symbol[symbol] = sync_csv_from_history(
-            broker=broker,
-            symbol=symbol,
-            resolution="5S",
-            timeframe_seconds=5,
-            csv_file="candles_5s.csv",
-            default_lookback_seconds=15 * 60,
-            min_required_count=MIN_5S_CANDLES,
-        )
-
-        if index < len(SYMBOLS) and STARTUP_HISTORY_REQUEST_DELAY > 0:
-            time.sleep(STARTUP_HISTORY_REQUEST_DELAY)
+        return
 
     startup_catchup_5s = catch_up_5s_history_to_common_bucket(
         broker=broker,

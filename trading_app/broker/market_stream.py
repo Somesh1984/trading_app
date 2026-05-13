@@ -5,6 +5,7 @@ import threading
 import time
 from queue import Queue
 
+from trading_app.broker.auth import FyersAuthError
 from trading_app.broker.websocket import (
     FyersWebSocketManager,
     RawMessage,
@@ -36,6 +37,7 @@ class MarketStream:
         self.raw_message_count = 0
         self.tick_message_count = 0
         self.last_message_time: float | None = None
+        self.last_error: str | None = None
         self.last_restart_time = 0.0
         self.restart_count = 0
 
@@ -81,16 +83,25 @@ class MarketStream:
         print("Market stream websocket closed:", message, flush=True)
 
     def _connect_socket(self, generation: int) -> None:
-        self.ws.connect_data_socket(
-            symbols=self.symbols,
-            on_message=lambda message: self._on_data(message, generation),
-            on_error=lambda error: self._on_error(error, generation),
-            on_close=lambda message: self._on_close(message, generation),
-            on_open=lambda: self._on_open(generation),
-            litemode=DEFAULT_LITEMODE,
-            data_type=DEFAULT_DATA_TYPE,
-            reconnect=False,
-        )
+        try:
+            self.ws.connect_data_socket(
+                symbols=self.symbols,
+                on_message=lambda message: self._on_data(message, generation),
+                on_error=lambda error: self._on_error(error, generation),
+                on_close=lambda message: self._on_close(message, generation),
+                on_open=lambda: self._on_open(generation),
+                litemode=DEFAULT_LITEMODE,
+                data_type=DEFAULT_DATA_TYPE,
+                reconnect=False,
+            )
+        except FyersAuthError as exc:
+            if self._is_current_generation(generation):
+                self.last_error = str(exc)
+                print("Market stream auth failed:", exc, flush=True)
+        except Exception as exc:
+            if self._is_current_generation(generation):
+                self.last_error = f"{type(exc).__name__}: {exc}"
+                print("Market stream failed:", self.last_error, flush=True)
 
     def start(self) -> None:
         with self._lock:
