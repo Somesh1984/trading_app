@@ -448,6 +448,8 @@ def main() -> None:
                     f"stale_ticks={builder_stats['ignored_stale_ticks']}",
                     f"dropped_queue={builder_stats['dropped_tick_queue_messages']}",
                     f"dropped_closed={builder_stats['dropped_closed_candles']}",
+                    f"volume_baseline_missing={builder_stats['volume_baseline_missing']}",
+                    f"volume_resets={builder_stats['volume_resets']}",
                     f"written_5s={interval_written}",
                     f"total_5s={total_written_5s}",
                     f"restarts={stream.restart_count}",

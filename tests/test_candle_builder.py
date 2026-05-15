@@ -114,7 +114,7 @@ def test_builder_marks_subscription_bucket_as_partial(monkeypatch):
     assert "subscribe_after_or_at_bucket_start" in candle.partial_reason
     assert candle.first_tick_epoch == tick_epoch
     assert candle.last_tick_epoch == tick_epoch
-    assert "volume_baseline_missing_or_reset" in candle.partial_reason
+    assert "volume_baseline_missing_or_reset" not in candle.partial_reason
 
 
 def test_builder_accumulates_volume_from_cumulative_total(monkeypatch):
@@ -159,7 +159,7 @@ def test_builder_accumulates_volume_from_cumulative_total(monkeypatch):
     assert current.is_partial is False
 
 
-def test_builder_marks_volume_reset_as_partial(monkeypatch):
+def test_builder_ignores_volume_reset_without_marking_partial(monkeypatch):
     builder = make_builder()
     tick_epoch = market_epoch(9, 15, 1)
     next_bucket_epoch = (tick_epoch - (tick_epoch % 5)) + 5
@@ -189,8 +189,9 @@ def test_builder_marks_volume_reset_as_partial(monkeypatch):
     ]
     current = next(candle for candle in candles if candle.bucket_epoch == next_bucket_epoch)
     assert current.volume == 0
-    assert current.is_partial is True
-    assert "volume_baseline_missing_or_reset" in current.partial_reason
+    assert current.is_partial is False
+    assert current.partial_reason == ""
+    assert builder.volume_reset_count == 1
 
 
 def test_builder_ignores_ticks_outside_market_hours():
@@ -374,7 +375,7 @@ def test_partial_reasons_are_combined(monkeypatch):
     assert candle.is_partial is True
     assert (
         candle.partial_reason
-        == "subscribe_after_or_at_bucket_start|stream_disconnected|volume_baseline_missing_or_reset"
+        == "subscribe_after_or_at_bucket_start|stream_disconnected"
     )
 
 

@@ -59,6 +59,8 @@ class Live5sCandleBuilder:
         self.ignored_stale_tick_count = 0
         self.dropped_tick_queue_message_count = 0
         self.dropped_closed_candle_count = 0
+        self.volume_baseline_missing_count = 0
+        self.volume_reset_count = 0
 
         self.stream_disconnected = False
         self.stream_disconnect_started_epoch: float | None = None
@@ -198,6 +200,8 @@ class Live5sCandleBuilder:
                     self.dropped_tick_queue_message_count
                 ),
                 "dropped_closed_candles": self.dropped_closed_candle_count,
+                "volume_baseline_missing": self.volume_baseline_missing_count,
+                "volume_resets": self.volume_reset_count,
                 "disconnect_intervals": len(self.stream_disconnect_intervals),
                 "default_symbol_gap_intervals": (
                     len(self.default_symbol_gap_intervals)
@@ -304,7 +308,6 @@ class Live5sCandleBuilder:
             last_tick_epoch=exch_feed_time,
         )
         self._apply_partial_flags(state, symbol, exch_feed_time, bucket_epoch)
-        self._apply_volume_partial(state, volume_delta)
         self._apply_state_to_candle(state)
         return state
 
@@ -332,7 +335,6 @@ class Live5sCandleBuilder:
             exch_feed_time,
             state.candle.bucket_epoch,
         )
-        self._apply_volume_partial(state, volume_delta)
         self._apply_state_to_candle(state)
 
     def _get_volume_delta(
@@ -351,10 +353,12 @@ class Live5sCandleBuilder:
         self.last_total_volume_by_symbol[symbol] = total_volume
 
         if previous_total is None:
+            self.volume_baseline_missing_count += 1
             return None
 
         volume_delta = total_volume - previous_total
         if volume_delta < 0:
+            self.volume_reset_count += 1
             return None
 
         return volume_delta
@@ -393,14 +397,6 @@ class Live5sCandleBuilder:
 
         self._apply_disconnect_partial(state)
         self._apply_default_symbol_gap_partial(state)
-
-    def _apply_volume_partial(
-        self,
-        state: CandleState,
-        volume_delta: int | None,
-    ) -> None:
-        if volume_delta is None:
-            self._mark_partial(state, "volume_baseline_missing_or_reset")
 
     def _mark_partial(self, state: CandleState, reason: str) -> None:
         state.is_partial = True
