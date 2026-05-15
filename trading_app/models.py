@@ -122,7 +122,12 @@ class LiveCandle:
     low: float
     close: float
     volume: int = 0
+    tick_count: int = 0
     is_complete: bool = False
+    first_tick_epoch: int = 0
+    last_tick_epoch: int = 0
+    is_partial: bool = False
+    partial_reason: str = ""
 
     def update(self, price: float) -> None:
         if price > self.high:
@@ -131,6 +136,7 @@ class LiveCandle:
             self.low = price
         self.close = price
         self.volume += 1
+        self.tick_count += 1
 
 
 @dataclass
