@@ -56,6 +56,7 @@ def test_builder_publishes_active_candle_after_bucket_close_plus_grace(monkeypat
             "symbol": SYMBOL,
             "ltp": 100.0,
             "exch_feed_time": tick_epoch,
+            "vol_traded_today": 1000,
         }
     )
 
@@ -70,6 +71,7 @@ def test_builder_publishes_active_candle_after_bucket_close_plus_grace(monkeypat
             "symbol": SYMBOL,
             "ltp": 101.0,
             "exch_feed_time": bucket_epoch + 4,
+            "vol_traded_today": 1015,
         }
     )
     assert builder.closed_5s_queue.empty()
@@ -87,7 +89,7 @@ def test_builder_publishes_active_candle_after_bucket_close_plus_grace(monkeypat
         101.0,
         2,
     )
-    assert candle.volume == 0
+    assert candle.volume == 15
     assert candle.is_complete is True
 
 
@@ -109,9 +111,86 @@ def test_builder_marks_subscription_bucket_as_partial(monkeypatch):
 
     candle = builder.closed_5s_queue.get_nowait()
     assert candle.is_partial is True
-    assert candle.partial_reason == "subscribe_after_or_at_bucket_start"
+    assert "subscribe_after_or_at_bucket_start" in candle.partial_reason
     assert candle.first_tick_epoch == tick_epoch
     assert candle.last_tick_epoch == tick_epoch
+    assert "volume_baseline_missing_or_reset" in candle.partial_reason
+
+
+def test_builder_accumulates_volume_from_cumulative_total(monkeypatch):
+    builder = make_builder()
+    tick_epoch = market_epoch(9, 15, 1)
+    next_bucket_epoch = (tick_epoch - (tick_epoch % 5)) + 5
+    monkeypatch.setattr(candle_builder_module.time, "time", lambda: tick_epoch)
+
+    builder.on_tick(
+        {
+            "symbol": OTHER_SYMBOL,
+            "ltp": 200.0,
+            "exch_feed_time": tick_epoch,
+            "vol_traded_today": 1000,
+        }
+    )
+    builder.on_tick(
+        {
+            "symbol": OTHER_SYMBOL,
+            "ltp": 201.0,
+            "exch_feed_time": next_bucket_epoch,
+            "vol_traded_today": 1010,
+        }
+    )
+    builder.on_tick(
+        {
+            "symbol": OTHER_SYMBOL,
+            "ltp": 202.0,
+            "exch_feed_time": next_bucket_epoch + 2,
+            "vol_traded_today": 1025,
+        }
+    )
+    builder.close_due_candles(next_bucket_epoch + 6)
+
+    candles = [
+        builder.closed_5s_queue.get_nowait(),
+        builder.closed_5s_queue.get_nowait(),
+    ]
+    current = next(candle for candle in candles if candle.bucket_epoch == next_bucket_epoch)
+    assert current.volume == 25
+    assert current.tick_count == 2
+    assert current.is_partial is False
+
+
+def test_builder_marks_volume_reset_as_partial(monkeypatch):
+    builder = make_builder()
+    tick_epoch = market_epoch(9, 15, 1)
+    next_bucket_epoch = (tick_epoch - (tick_epoch % 5)) + 5
+    monkeypatch.setattr(candle_builder_module.time, "time", lambda: tick_epoch)
+
+    builder.on_tick(
+        {
+            "symbol": OTHER_SYMBOL,
+            "ltp": 200.0,
+            "exch_feed_time": tick_epoch,
+            "vol_traded_today": 1000,
+        }
+    )
+    builder.on_tick(
+        {
+            "symbol": OTHER_SYMBOL,
+            "ltp": 201.0,
+            "exch_feed_time": next_bucket_epoch,
+            "vol_traded_today": 900,
+        }
+    )
+    builder.close_due_candles(next_bucket_epoch + 6)
+
+    candles = [
+        builder.closed_5s_queue.get_nowait(),
+        builder.closed_5s_queue.get_nowait(),
+    ]
+    current = next(candle for candle in candles if candle.bucket_epoch == next_bucket_epoch)
+    assert current.volume == 0
+    assert current.is_partial is True
+    assert "volume_baseline_missing_or_reset" in current.partial_reason
 
 
 def test_builder_ignores_ticks_outside_market_hours():
@@ -178,6 +257,7 @@ def test_closed_queue_put_is_non_blocking_when_full(monkeypatch):
             "symbol": SYMBOL,
             "ltp": 100.0,
             "exch_feed_time": tick_epoch,
+            "vol_traded_today": 1000,
         }
     )
     builder.close_due_candles(bucket_epoch + 6)
@@ -204,8 +284,7 @@ def test_fast_disconnect_does_not_mark_partial(monkeypatch):
     builder.close_due_candles(bucket_epoch + 6)
 
     candle = builder.closed_5s_queue.get_nowait()
-    assert candle.is_partial is False
-    assert candle.partial_reason == ""
+    assert "stream_disconnected" not in candle.partial_reason
 
 
 def test_disconnect_interval_marks_overlapping_candle_partial(monkeypatch):
@@ -221,13 +300,14 @@ def test_disconnect_interval_marks_overlapping_candle_partial(monkeypatch):
             "symbol": SYMBOL,
             "ltp": 100.0,
             "exch_feed_time": tick_epoch,
+            "vol_traded_today": 1000,
         }
     )
     builder.close_due_candles(bucket_epoch + 6)
 
     candle = builder.closed_5s_queue.get_nowait()
     assert candle.is_partial is True
-    assert candle.partial_reason == "stream_disconnected"
+    assert "stream_disconnected" in candle.partial_reason
 
 
 def test_default_symbol_gap_marks_other_symbol_candle_partial(monkeypatch):
@@ -241,6 +321,7 @@ def test_default_symbol_gap_marks_other_symbol_candle_partial(monkeypatch):
             "symbol": SYMBOL,
             "ltp": 100.0,
             "exch_feed_time": bucket_epoch + 1,
+            "vol_traded_today": 1000,
         }
     )
     builder.on_tick(
@@ -248,6 +329,7 @@ def test_default_symbol_gap_marks_other_symbol_candle_partial(monkeypatch):
             "symbol": OTHER_SYMBOL,
             "ltp": 200.0,
             "exch_feed_time": bucket_epoch + 2,
+            "vol_traded_today": 2000,
         }
     )
     builder.on_tick(
@@ -255,6 +337,7 @@ def test_default_symbol_gap_marks_other_symbol_candle_partial(monkeypatch):
             "symbol": SYMBOL,
             "ltp": 101.0,
             "exch_feed_time": bucket_epoch + 4,
+            "vol_traded_today": 1010,
         }
     )
     builder.close_due_candles(bucket_epoch + 6)
@@ -265,7 +348,7 @@ def test_default_symbol_gap_marks_other_symbol_candle_partial(monkeypatch):
     ]
     other = next(candle for candle in candles if candle.symbol == OTHER_SYMBOL)
     assert other.is_partial is True
-    assert other.partial_reason == "default_symbol_tick_gap"
+    assert "default_symbol_tick_gap" in other.partial_reason
 
 
 def test_partial_reasons_are_combined(monkeypatch):
@@ -282,6 +365,7 @@ def test_partial_reasons_are_combined(monkeypatch):
             "symbol": SYMBOL,
             "ltp": 100.0,
             "exch_feed_time": tick_epoch,
+            "vol_traded_today": 1000,
         }
     )
     builder.close_due_candles(bucket_epoch + 6)
@@ -290,7 +374,7 @@ def test_partial_reasons_are_combined(monkeypatch):
     assert candle.is_partial is True
     assert (
         candle.partial_reason
-        == "subscribe_after_or_at_bucket_start|stream_disconnected"
+        == "subscribe_after_or_at_bucket_start|stream_disconnected|volume_baseline_missing_or_reset"
     )
 
 

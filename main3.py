@@ -49,6 +49,7 @@ CSV_COLUMNS = [
     "high",
     "low",
     "close",
+    "volume",
     "tick_count",
     "is_complete",
     "first_tick_epoch",
@@ -96,6 +97,7 @@ def candle_to_row(candle: LiveCandle) -> dict[str, Any]:
         "high": candle.high,
         "low": candle.low,
         "close": candle.close,
+        "volume": candle.volume,
         "tick_count": candle.tick_count,
         "is_complete": candle.is_complete,
         "first_tick_epoch": first_tick_epoch,
@@ -165,8 +167,6 @@ def append_candles_to_csv(csv_file: Path, candles: list[LiveCandle]) -> None:
 
         for candle in candles:
             row = candle_to_row(candle)
-            if "volume" in fieldnames and "volume" not in row:
-                row["volume"] = ""
             writer.writerow(row)
 
 

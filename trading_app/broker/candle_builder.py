@@ -53,6 +53,7 @@ class Live5sCandleBuilder:
         self.pending_close_heap: list[tuple[int, str, int]] = []
         self.last_closed_bucket_by_symbol: dict[str, int] = {}
         self.last_tick_epoch_by_symbol: dict[str, int] = {}
+        self.last_total_volume_by_symbol: dict[str, int] = {}
         self.subscribe_epoch_by_symbol: dict[str, int] = {}
         self.ignored_late_tick_count = 0
         self.ignored_stale_tick_count = 0
@@ -108,6 +109,7 @@ class Live5sCandleBuilder:
                 symbol = str(message.get("symbol", ""))
                 ltp = float(message.get("ltp", 0.0) or 0.0)
                 exch_feed_time = int(message.get("exch_feed_time", 0) or 0)
+                volume_delta = self._get_volume_delta(symbol, message)
 
                 if not symbol or ltp <= 0 or exch_feed_time <= 0:
                     return
@@ -124,7 +126,7 @@ class Live5sCandleBuilder:
 
                 pending = self.pending_by_symbol.get(symbol)
                 if pending is not None and bucket_epoch == pending.candle.bucket_epoch:
-                    self._update_state(pending, ltp, exch_feed_time)
+                    self._update_state(pending, ltp, exch_feed_time, volume_delta)
                     self._update_last_tick(symbol, exch_feed_time)
                     return
 
@@ -133,7 +135,13 @@ class Live5sCandleBuilder:
                 if active is None:
                     self._set_active_state(
                         symbol,
-                        self._new_state(symbol, ltp, exch_feed_time, bucket_epoch),
+                        self._new_state(
+                            symbol,
+                            ltp,
+                            exch_feed_time,
+                            bucket_epoch,
+                            volume_delta,
+                        ),
                     )
                     self._update_last_tick(symbol, exch_feed_time)
                     return
@@ -143,14 +151,20 @@ class Live5sCandleBuilder:
                     return
 
                 if bucket_epoch == active.candle.bucket_epoch:
-                    self._update_state(active, ltp, exch_feed_time)
+                    self._update_state(active, ltp, exch_feed_time, volume_delta)
                     self._update_last_tick(symbol, exch_feed_time)
                     return
 
                 self._move_active_to_pending(symbol, active)
                 self._set_active_state(
                     symbol,
-                    self._new_state(symbol, ltp, exch_feed_time, bucket_epoch),
+                    self._new_state(
+                        symbol,
+                        ltp,
+                        exch_feed_time,
+                        bucket_epoch,
+                        volume_delta,
+                    ),
                 )
                 self._update_last_tick(symbol, exch_feed_time)
 
@@ -160,8 +174,9 @@ class Live5sCandleBuilder:
     def close_due_candles(self, now_epoch: float | None = None) -> int:
         with self._lock:
             now = time.time() if now_epoch is None else now_epoch
-            self._move_due_active_to_pending(now)
             closed_count = self._close_due_pending(now)
+            self._move_due_active_to_pending(now)
+            closed_count += self._close_due_pending(now)
             self._prune_partial_intervals()
             return closed_count
 
@@ -266,6 +281,7 @@ class Live5sCandleBuilder:
         ltp: float,
         exch_feed_time: int,
         bucket_epoch: int,
+        volume_delta: int | None,
     ) -> CandleState:
         candle = LiveCandle(
             symbol=symbol,
@@ -275,7 +291,7 @@ class Live5sCandleBuilder:
             high=ltp,
             low=ltp,
             close=ltp,
-            volume=0,
+            volume=max(volume_delta or 0, 0),
             tick_count=1,
             is_complete=False,
             first_tick_epoch=exch_feed_time,
@@ -288,10 +304,17 @@ class Live5sCandleBuilder:
             last_tick_epoch=exch_feed_time,
         )
         self._apply_partial_flags(state, symbol, exch_feed_time, bucket_epoch)
+        self._apply_volume_partial(state, volume_delta)
         self._apply_state_to_candle(state)
         return state
 
-    def _update_state(self, state: CandleState, ltp: float, exch_feed_time: int) -> None:
+    def _update_state(
+        self,
+        state: CandleState,
+        ltp: float,
+        exch_feed_time: int,
+        volume_delta: int | None,
+    ) -> None:
         if ltp > state.candle.high:
             state.candle.high = ltp
         if ltp < state.candle.low:
@@ -299,6 +322,8 @@ class Live5sCandleBuilder:
 
         state.candle.close = ltp
         state.candle.tick_count += 1
+        if volume_delta is not None and volume_delta > 0:
+            state.candle.volume += volume_delta
         state.last_tick_epoch = exch_feed_time
 
         self._apply_partial_flags(
@@ -307,7 +332,45 @@ class Live5sCandleBuilder:
             exch_feed_time,
             state.candle.bucket_epoch,
         )
+        self._apply_volume_partial(state, volume_delta)
         self._apply_state_to_candle(state)
+
+    def _get_volume_delta(
+        self,
+        symbol: str,
+        message: dict[str, Any],
+    ) -> int | None:
+        if not symbol:
+            return None
+
+        total_volume = self._extract_total_volume(message)
+        if total_volume is None:
+            return None
+
+        previous_total = self.last_total_volume_by_symbol.get(symbol)
+        self.last_total_volume_by_symbol[symbol] = total_volume
+
+        if previous_total is None:
+            return None
+
+        volume_delta = total_volume - previous_total
+        if volume_delta < 0:
+            return None
+
+        return volume_delta
+
+    def _extract_total_volume(self, message: dict[str, Any]) -> int | None:
+        raw_volume = message.get("vol_traded_today")
+        if raw_volume is None:
+            raw_volume = message.get("volume")
+
+        if raw_volume is None:
+            return None
+
+        try:
+            return int(float(raw_volume))
+        except (TypeError, ValueError):
+            return None
 
     def _apply_partial_flags(
         self,
@@ -330,6 +393,14 @@ class Live5sCandleBuilder:
 
         self._apply_disconnect_partial(state)
         self._apply_default_symbol_gap_partial(state)
+
+    def _apply_volume_partial(
+        self,
+        state: CandleState,
+        volume_delta: int | None,
+    ) -> None:
+        if volume_delta is None:
+            self._mark_partial(state, "volume_baseline_missing_or_reset")
 
     def _mark_partial(self, state: CandleState, reason: str) -> None:
         state.is_partial = True
